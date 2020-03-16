@@ -6,7 +6,7 @@ for line in SAMPLE_FASTQ_TABLE:
 	SAMPLE.append(line.split()[0])
 	FASTQ.append(line.split()[1])
 # salmon quantification
-SALMON_QUANT_OUTPUT = ['salmon_quant/' + f.split('_R1')[0] \
+SALMON_QUANT_OUTPUT = ['salmon_quant/' + f.split('_R1')[0] + '/quant.sf'  \
 	for f in FASTQ if 'R1' in f] 
 	
 # fastqc of each fastq file pair
@@ -87,7 +87,7 @@ rule salmon_quant:
 		r2 = 'fastq_files/{flowcell_lane_info}_R2_001.fastq.gz',
 		index = config['annotation_path'] + 'salmon_index_gencode.v33.pc_transcripts_salmon110'
 	output:
-		'salmon_quant/{flowcell_lane_info}/quant/sf'
+		'salmon_quant/{flowcell_lane_info}/quant.sf'
 	params:
 		'salmon_quant/{flowcell_lane_info}'
 	threads: 16
