@@ -16,7 +16,7 @@ FASTQC_OUTPUT = ['fastqc/' + f.split('_R1')[0] \
 #wildcard_constraints:
 #	flowcell_lane_info = "^H\w.*_L\d{3}_"
 
-localrules: all, pull_fastq_from_nisc, download_references
+localrules: all, download_references
 
 
 rule all:
