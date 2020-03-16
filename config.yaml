@@ -1,0 +1,2 @@
+annotation_path: '/data/mcgaugheyd/genomes/GRCh38/'
+sample_fastq_table: 'sample_table.tsv'
