@@ -19,5 +19,18 @@
 		"partition" : "quick",
 		"time" : "04:00:00",
 		"mem" : "32g"
+	},
+	"STAR_index" :
+	{
+		"time" : "12:00:00",
+		"mem" : "96g",
+		"partition" : "norm"
+	},
+	"STAR_align" :
+	{
+		"time" : "24:00:00",
+		"mem" : "48g",
+		"partition" : "norm",
+		"extra" : " --gres=lscratch:80"
 	}
 }

@@ -1,2 +1,3 @@
+gencode_version: '35'
 annotation_path: '/data/mcgaugheyd/genomes/GRCh38/'
-sample_fastq_table: 'sample_table_dag.tsv'
+sample_fastq_table: 'sample_table.tsv'
