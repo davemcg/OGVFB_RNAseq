@@ -5,13 +5,13 @@ SAMPLE_DICT = dict()
 for line in SAMPLE_FASTQ_TABLE:
 	sample = line.split()[0]
 	fastq = line.split()[1]
-	if '_R1_001' in fastq and sample not in SAMPLE_DICT:
+	if config['forward_suffix'] in fastq and sample not in SAMPLE_DICT:
 		SAMPLE_DICT[sample] = {'Forward' : [fastq], 'Reverse' : []}
-	elif '_R2_001' in fastq and sample not in SAMPLE_DICT:
+	elif config['reverse_suffix'] in fastq and sample not in SAMPLE_DICT:
 		SAMPLE_DICT[sample] = {'Forward' : [], 'Reverse': [fastq]}
-	elif '_R1_001' in fastq and sample in SAMPLE_DICT:
+	elif config['forward_suffix'] in fastq and sample in SAMPLE_DICT:
 		SAMPLE_DICT[sample]['Forward'].append(fastq)
-	elif '_R2_001' in fastq and sample in SAMPLE_DICT:
+	elif config['reverse_suffix'] in fastq and sample in SAMPLE_DICT:
 		SAMPLE_DICT[sample]['Reverse'].append(fastq)
 	else:
 		print("parsing error?")
@@ -28,9 +28,9 @@ def fastq_by_sample(sample, read):
 
 def pe_fastq_by_lane(lane_sample, read):
 	if read == 'Forward':
-		out = config['fastq_relative_dir'] + '/' + lane_sample + '_R1_001.fastq.gz'
+		out = config['fastq_relative_dir'] + '/' + lane_sample + config['forward_suffix']+ '.fastq.gz'
 	elif read == 'Reverse':
-		out = config['fastq_relative_dir'] + '/' + lane_sample + '_R2_001.fastq.gz'
+		out = config['fastq_relative_dir'] + '/' + lane_sample + config['reverse_suffix'] + '.fastq.gz'
 	return(out)
 	
 
@@ -89,8 +89,8 @@ rule trim_fastq:
 		r1 = lambda wildcards: pe_fastq_by_lane(wildcards.lane_sample, 'Forward'),
 		r2 = lambda wildcards: pe_fastq_by_lane(wildcards.lane_sample, 'Reverse')
 	output:
-		r1 = 'fastq_trimmed/{lane_sample}_R1_001.fastq.gz',
-		r2 = 'fastq_trimmed/{lane_sample}_R2_001.fastq.gz'
+		r1 = 'fastq_trimmed/{lane_sample}' + config['forward_suffix'] + '.fastq.gz',
+		r2 = 'fastq_trimmed/{lane_sample}' + config['reverse_suffix'] + '.fastq.gz'
 	threads: 8
 	conda: 'OGVFB_RNAseq.yml'
 	shell:
