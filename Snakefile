@@ -67,19 +67,13 @@ rule download_references:
 		#full_gtf = config['annotation_path'] + 'gencode.v' + config['gencode_version'] + '.annotation.gtf.gz',
 		#full_tx = config['annotation_path'] + 'gencode.v' + config['gencode_version'] + '.transcripts.fa.gz',
 		pc_tx = config['annotation_path'] + 'gencode.v' + config['gencode_version'] + '.pc_transcripts.fa.gz',
-		genome_fa = config['annotation_path'] + 'GRCh38.p13.genome.fa.gz'
+		genome_fa = config['annotation_path'] + config['genome']
 	params: 
-		#gtf_basic = 'gencode.v' + config['gencode_version'] + '.basic.annotation.gtf.gz',
-		#gtf = 'gencode.v' + config['gencode_version'] + '.annotation.gtf.gz',
-		#fasta_transcripts = 'gencode.v' + config['gencode_version'] + '.transcripts.fa.gz',
 		fasta_pc_transcripts = 'gencode.v' + config['gencode_version'] + '.pc_transcripts.fa.gz',
-		genome_fa = 'GRCh38.p13.genome.fa.gz',
-		ftp = 'rsync://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_' + config['gencode_version'] + '/'
+		genome_fa = config['genome'],
+		ftp = config['ftp'] + config['gencode_version'] + '/'
 	shell:
 		"""
-		#rsync -av {params.ftp}{params.gtf_basic} {config[annotation_path]}
-		#rsync -av {params.ftp}{params.gtf} {config[annotation_path]}
-		#rsync -av {params.ftp}{params.fasta_transcripts} {config[annotation_path]}
 		rsync -av {params.ftp}{params.fasta_pc_transcripts} {config[annotation_path]}
 		rsync -av {params.ftp}{params.genome_fa} {config[annotation_path]}
 		"""
@@ -114,8 +108,8 @@ rule fastqc:
 
 rule salmon_index:
 	input:
-		tx = config['annotation_path'] + 'gencode.v35.pc_transcripts.fa.gz',
-		genome = config['annotation_path'] + 'GRCh38.p13.genome.fa.gz'
+		tx = config['annotation_path'] + config['tx'],
+		genome = config['annotation_path'] + config['genome']
 	output:
 		directory(config['annotation_path'] + 'salmon_index_gencode.' + config['gencode_version'] + '.pc_transcripts_salmon130')
 	threads: 16
@@ -177,16 +171,19 @@ rule STAR_align:
 		r2 = lambda wildcards: fastq_by_sample(wildcards.sample, 'Reverse')
 	output:
 		'STAR_align/{sample}/Aligned.sortedByCoord.out.bam'
+	conda: 'OGVFB_RNAseq.yml'
 	params:
 		scratch = '/lscratch/$SLURM_JOB_ID/STAR_align__{sample}/',
-		out = 'STAR_align/{sample}/'
+		out = 'STAR_align/{sample}/',
+		fq_r1 = lambda wildcards, input: ','.join(input.r1),
+		fq_r2 = lambda wildcards, input: ','.join(input.r2)
 	threads: 1 
 	shell:
 		"""
 		mkdir -p {params.out}
 		STAR --runThreadN {threads} \
 			--genomeDir {input.index} \
-			--readFilesIn {input.r1} {input.r2} \
+			--readFilesIn {params.fq_r1} {params.fq_r2} \
 			--outSAMtype BAM Unsorted \
 			--readFilesCommand zcat \
 			--outFileNamePrefix {params.out} \
