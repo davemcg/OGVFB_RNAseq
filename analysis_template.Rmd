@@ -1,0 +1,232 @@
+---
+title: "Analysis \"Template\""
+output: 
+  html_notebook:
+    theme: flatly
+    toc: true
+    toc_float: true
+    code_folding: hide
+---
+```{r, message=FALSE, message=FALSE, warning=FALSE}
+library(data.table)
+library(tidyverse)
+library(biomaRt)
+library(tximport)
+library(DESeq2)
+library(stringr)
+library(ggrepel)
+library(apeglm)
+library(clusterProfiler)
+# Parallel
+library(BiocParallel)
+register(MulticoreParam(6))
+#working_dir <- '/Volumes/ARC168/PROJECTS/hufnagel/macaque_fovea_RNA-seq/salmon_quant/'
+working_dir <- '~/data/project/salmon_quant/'
+files <- list.files(path=working_dir,recursive=TRUE,pattern='quant.sf', full.names = TRUE)
+```
+
+# Extract gene annotation
+```{r, message=FALSE, message=FALSE, warning=FALSE}
+anno <- fread(files[1]) 
+anno$Gene <- sapply(anno$Name,function(x) strsplit(x,'\\|')[[1]][6])
+anno_tximport <- anno %>% 
+  dplyr::select(target_id = Name, Gene)
+```
+
+# Import quant at gene level
+```{r, message=FALSE, message=FALSE, warning=FALSE}
+txi <- tximport(files, type = "salmon", tx2gene = anno_tximport)
+txi.deseq2 <- data.frame(txi$counts)
+```
+
+# Metadata
+```{r}
+meta <- gsub(pattern = '\\/Users\\/mcgaugheyd\\/data\\/project\\/salmon_quant\\/\\/','',files) %>% gsub('\\/quant.sf','',.) %>% enframe()
+meta$fastq_path <- files
+meta <- meta %>% separate(value, into = c('line','treatment','biological_replicate'), sep = '_', remove = FALSE)
+```
+
+# Deseq2 time
+Treatment compared with line as a covariate
+
+VST norm for PCA
+```{r, message=FALSE, message=FALSE, warning=FALSE}
+dds <- DESeqDataSetFromTximport(txi, meta, ~treatment + line)
+
+DESeq2Table <- DESeq(dds, parallel = T)
+# rld <- rlogTransformation(DESeq2Table, blind=TRUE)
+vst <- varianceStabilizingTransformation(DESeq2Table)
+colnames(vst) <- meta$value
+```
+
+# PCA
+```{r}
+#pca 
+library(matrixStats)
+ntop = 1000
+Pvars <- rowVars(assay(vst))
+select <- order(Pvars, decreasing = TRUE)[seq_len(min(ntop, 
+                                                      length(Pvars)))]
+PCA <- prcomp(t(assay(vst)[select, ]), scale = F)
+percentVar <- round(100*PCA$sdev^2/sum(PCA$sdev^2),1)
+dataGG = data.frame(PC1 = PCA$x[,1], PC2 = PCA$x[,2], 
+                    PC3 = PCA$x[,3], PC4 = PCA$x[,4], 
+                    line = colData(vst)$line,
+                    treatment=colData(vst)$treatment)
+
+ggplot(dataGG, aes(PC1, PC2, color=line, shape=treatment)) +
+  geom_point(size=3) +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
+  cowplot::theme_cowplot()
+
+ggplot(dataGG, aes(PC3, PC4, color=line, shape=treatment)) +
+  geom_point(size=3) +
+  xlab(paste0("PC3: ",percentVar[3],"% variance")) +
+  ylab(paste0("PC4: ",percentVar[4],"% variance")) + 
+  cowplot::theme_cowplot()
+```
+
+
+
+# Diff Testing
+
+Run Diff Testing with a contrast to remove one of the treatments
+``` {r, echo=FALSE,warning=FALSE,message=FALSE}
+#########
+# DE time
+#########
+
+design(dds) <- formula(~ type + condition)
+dds <- DESeq(dds)
+A_vs_B <- results(dds, contrast = c('treatment','A','B'))
+
+A_vs_B_LFC <- lfcShrink(dds, coef = "treatment_A_vs_B", type = 'apeglm')
+plotMA(A_vs_B_LFC)
+```
+
+## A vs B
+Positive is genes that are more expressed in A vs B
+```{r}
+A_vs_B %>%  as_tibble(rownames = 'Gene') %>% arrange(padj) %>% head(2000) %>% DT::datatable()
+```
+## Volcano Plot
+On the right is genes that are more expressed in A vs B
+```{r}
+volcano_maker <- function(df, title="Volcano Plot", pvalue='pvalue', padj='padj', logFC='log2FoldChange', gene_list = ''){
+  df <- df[!is.na(df$pvalue),]
+  print(dim(df))
+  df$Class <- 'Not Significant'
+  df$Class[df[,'padj'] < 0.01] <- "FDR < 0.01"
+  df$GeneT <- df$Gene
+  df$Gene[!df$Gene %in% gene_list] <- ''
+  
+  plot <- ggplot(data=df,aes(label=Gene, x = log2FoldChange, y = -log10(pvalue))) + 
+    geom_point(aes(colour=Class)) +
+    scale_colour_manual(values=c("darkred","grey")) + 
+    cowplot::theme_cowplot() +
+    geom_label_repel(data=bind_rows(subset(df, padj<0.01 & baseMean > 500) %>% arrange((log2FoldChange)) %>% head(10), 
+                                    subset(df, padj<0.01 & baseMean > 500) %>% arrange((log2FoldChange)) %>% tail(10)), 
+                     aes(label=GeneT)) +
+    xlab('logFC') + ylab('-log10(p value)') +
+    ggtitle(title) + cowplot::theme_cowplot() +
+    geom_vline(aes(xintercept=-1),linetype="dotted") +
+    geom_vline(aes(xintercept=1),linetype="dotted") 
+  plot
+}
+
+volcano_maker(df = A_vs_B %>% as_tibble(rownames = 'Gene')) + coord_cartesian(xlim = c(-5,5))
+```
+
+## Dot Plots of Select Genes
+```{r}
+colnames(gene_counts) <- meta$value
+plot_genes <- bind_rows(subset(A_vs_B %>% as_tibble(rownames = 'Gene'), padj<0.01 & baseMean > 500) %>% arrange((log2FoldChange)) %>% head(5), 
+                        subset(A_vs_B %>% as_tibble(rownames = 'Gene'), padj<0.01 & baseMean > 500) %>% arrange((log2FoldChange)) %>% tail(5)) %>% pull(Gene)
+gene_counts %>% as_tibble(rownames = 'Gene') %>% 
+  pivot_longer(cols = AMDCD_A_1:TJP1_B_3) %>% 
+  left_join(meta, by = c('name' = 'value')) %>% 
+  filter(Gene %in% plot_genes) %>% 
+  ggplot(aes(x=treatment, y = log2(value), color = treatment)) + 
+  geom_boxplot(color = 'black') +
+  geom_point() + 
+  facet_wrap(~Gene) +
+  cowplot::theme_cowplot() +
+  coord_flip()
+```
+
+
+# GO Enrichment of A vs B
+```{r}
+library(clusterProfiler)
+library(enrichplot)
+
+
+diff_genes <- A_vs_B %>% as_tibble(rownames = 'Gene') %>% filter(padj < 0.01, abs(log2FoldChange) > 1) 
+eg_diff_genes <- bitr(diff_genes$Gene, fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Hs.eg.db")
+eg_diff_genes <- diff_genes %>% left_join(., eg_diff_genes, by = c('Gene' = 'SYMBOL'))
+eg_universe = bitr(A_vs_B %>% as_tibble(rownames = 'Gene') %>% pull(Gene), fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Hs.eg.db")
+
+
+ego <- enrichGO(gene          = eg_diff_genes$ENTREZID,
+                universe      = eg_universe$ENTREZID,
+                OrgDb         = org.Hs.eg.db,
+                ont           = "all",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.01,
+                qvalueCutoff  = 0.05,
+                readable      = TRUE)
+
+p1 <- dotplot(ego, showCategory=30) + ggtitle("Dotplot for GO")
+p1
+
+
+```
+
+# Enrichment Analysis (GO and Pathway)
+## Wikipathways
+```{r}
+system("wget https://wikipathways-data.wmcloud.org/current/gmt/wikipathways-20210610-gmt-Homo_sapiens.gmt")
+wp2gene <- read.gmt('wikipathways-20210610-gmt-Homo_sapiens.gmt')
+wp2gene <- wp2gene %>% tidyr::separate(term, c("name","version","wpid","org"), "%")
+wpid2gene <- wp2gene %>% dplyr::select(wpid, gene) #TERM2GENE
+wpid2name <- wp2gene %>% dplyr::select(wpid, name) #TERM2NAME
+
+ewp <- enricher(eg_diff_genes$ENTREZID, 
+                TERM2GENE = wpid2gene, 
+                TERM2NAME = wpid2name, 
+                pvalueCutoff = 0.1)
+
+ewp_plot <- dotplot(ewp, showCategory=30) + ggtitle("Dotplot for WikiPathways")
+ewp_plot
+```
+
+## KEGG Pathway Enrichment
+```{r, fig.width=3}
+kk <- enrichKEGG(gene         = eg_diff_genes$ENTREZID, 
+                 universe = eg_universe$ENTREZID,
+                 organism     = 'hsa',
+                 pvalueCutoff = 0.1)
+dotplot(kk) + ggtitle("KEGG Pathway Enrichment") 
+```
+
+## "CNET" Plot
+Relationships between related GO terms with shared genes
+```{r, fig.width=6, fig.height=4}
+geneList <- eg_diff_genes$log2FoldChange
+names(geneList) <- eg_diff_genes$Gene
+cnet <- cnetplot(ego, foldChange = geneList) + scale_color_viridis_c(name = 'log2(FoldChange)')
+cnet
+```
+
+## Enriched GO Term Relationships
+Shows the "sets" of GO terms to increase understanding of what the diff gene sets are doing. There are many related GO terms.
+```{r, fig.width=4}
+go_term_relationships <- emapplot(ego,layout="kk") #+ ggtitle("Enriched GO Term Relationships")
+go_term_relationships
+```
+
+# Session Info
+```{r}
+devtools::session_info()
+```
