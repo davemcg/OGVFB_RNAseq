@@ -1,0 +1,97 @@
+rule all:
+	input:
+		expand('umap/seurat_dims{dims}_nneighbors{nneighbors}_mindist{dist}.umap.Rdata', \
+					dims = [10,20,30], \
+					nneighbors = [30,60], \
+					dist = [0.1, 0.3]),
+		expand('fastqc/{tag}/possorted_genome_bam_fastqc.html', tag = config['samples'])
+# cellranger mkref --genome=GRCh38_GFP_RFP --fasta=reference_cellranger-GRCh38-1.2.0_plus_GFP/genome_GFP_RFP.fa --genes reference_cellranger-GRCh38-1.2.0_plus_GFP/genes_GFP_RFP.gtf --nthreads=10
+
+#rule STAR_index:
+#	input:
+#	output:
+
+#rule STAR_solo
+
+
+rule call:
+	input:
+		'fastq/'
+	output:
+		'{tag}/outs/cloupe.cloupe'
+	threads: 24
+	shell:
+		"""
+		mkdir -p {wildcards.tag}
+		rm -r {wildcards.tag}
+		module load {config[cellranger_version]}
+		cellranger count \
+			--id {wildcards.tag} \
+			--sample {wildcards.tag} \
+			--fastqs fastq/ \
+			--transcriptome {config[transcriptome]} \
+			--localcores {threads} \
+			--localmem=30 
+		"""
+
+rule fastqc:
+	input:
+		'{tag}/outs/cloupe.cloupe'
+	params:
+		inp = '{tag}/outs/possorted_genome_bam.bam',
+		out = 'fastqc/{tag}'
+	output:
+		'fastqc/{tag}/possorted_genome_bam_fastqc.html'
+	shell:
+		"""
+		module load fastqc
+		mkdir -p {params.out}
+		fastqc -o {params.out} {params.inp}
+		"""
+rule aggr:
+	input:
+		#hd5 = expand('{tag}/outs/cloupe.cloupe', tag = ['scRNA_D0','scRNA_D10','scRNA_D15','scRNA_D20','scRNA_D25','scRNA_D2','scRNA_D40','scRNA_TW']),
+		hd5 = expand('{tag}/outs/cloupe.cloupe', tag = config['samples']),
+		csv = config['sample_info']
+	params:
+		folder = 'aggr'
+	output:
+		cloupe = 'aggr/outs/count/cloupe.cloupe'
+	threads: 16
+	shell:
+		"""
+		mkdir -p {params.folder}
+		rm -r {params.folder}
+		module load {config[cellranger_version]}
+		cellranger aggr --id={params.folder} --csv={input.csv} --localcores {threads} --localmem 30
+		"""
+
+rule make_seurat:
+	input:
+		'aggr/outs/count/cloupe.cloupe'
+	output:
+		'data/seurat_dims{dims}_nneighbors{nneighbors}_mindist{dist}.obj.Rdata'
+	shell:
+		"""
+		module load R/3.6
+		Rscript /src/make_seurat.R merged_2nd_round/outs/filtered_feature_bc_matrix/ \
+			{wildcards.dims} \
+			{wildcards.nneighbors} \
+			{wildcards.dist} \
+			{output}
+		"""
+
+rule extract_umap:
+	input:
+		'data/seurat_dims{dims}_nneighbors{nneighbors}_mindist{dist}.obj.Rdata'
+	output:
+		'umap/seurat_dims{dims}_nneighbors{nneighbors}_mindist{dist}.umap.Rdata'
+	shell:
+		"""
+		module load R/3.6
+		Rscript /home/mcgaugheyd/git/iPSC_RPE_differentiation/src/extract_umap.R {input} \
+			{wildcards.dims} \
+			{wildcards.nneighbors} \
+			{wildcards.dist} \
+			{output}
+		"""

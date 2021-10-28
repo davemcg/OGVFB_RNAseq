@@ -1,0 +1,3 @@
+cellranger_version: 'cellranger/3.0.2'
+expected_cells: '7000'
+transcriptome: 'GRCh38_GFP_RFP'

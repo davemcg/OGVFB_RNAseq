@@ -6,7 +6,7 @@
 
 mkdir -p 00log
 
-module load snakemake || exit 1
+#module load snakemake || exit 1
 
 sbcmd="sbatch --cpus-per-task={threads} \
 --mem={cluster.mem} \

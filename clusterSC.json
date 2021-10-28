@@ -1,0 +1,17 @@
+{
+	"__default__" :
+	{
+		"partition" : "norm",
+		"time" : "36:00:00",
+		"mem" : "64g",
+		"extra" : "",
+		"output"  : "00log/{rule}_{wildcards}.out",
+		"error" : "00log/{rule}_{wildcards}.err" 
+	},
+	"extract_umap":
+	{
+		"partition" : "quick",
+		"mem" : "32G",
+		"time" : "00:30:00"
+	}
+}
