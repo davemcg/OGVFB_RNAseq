@@ -87,7 +87,41 @@ ggplot(dataGG, aes(PC3, PC4, color=line, shape=treatment)) +
   cowplot::theme_cowplot()
 ```
 
+## PC Loadings
+PC2 appears to separate BLAH against the rest
 
+Here are the genes which contribute most to this PC:
+```{r}
+PCA$rotation %>% as_tibble(rownames = 'Gene') %>% arrange(-abs(PC2)) %>% dplyr::select(Gene,PC2) %>% head(50) %>% DT::datatable()
+```
+
+
+# Heatmap
+Run clustering on sample <-> sample distances
+
+```{r, fig.height=4, fig.width=5}
+library(ComplexHeatmap)
+sampleDists <- dist(t(assay(vst)[select, ]))
+
+sampleDistMatrix <- as.matrix(sampleDists) %>% scale(., center= FALSE)
+colnames(sampleDistMatrix) <- colData(dds)$Sample
+row.names(sampleDistMatrix) <- colData(dds)$Sample
+
+ha_column = HeatmapAnnotation(df = data.frame(Cells = meta$Cells %>% factor(),
+                                                  Treatment = meta$Treatment %>% factor()),
+                                  col = list(Cells = c("Line A" = viridis::viridis(20)[6], 
+                                                       "Line B" = viridis::viridis(20)[14]),
+                                             Treatment = c("CTRL" = viridis::magma(20)[3], 
+                                                           "BLEACH" = viridis::magma(20)[7], 
+                                                           "UNICORN HORNS" = viridis::magma(20)[11],
+                                                           "POWERFUL FLASHLIGHT" =  viridis::magma(20)[15])))
+
+
+Heatmap(sampleDistMatrix, 
+        top_annotation = ha_column,name = 'Distance',
+        col = circlize::colorRamp2(seq(0,1.4,0.1), 
+                                   colors = viridis::viridis(n = 15)))
+```
 
 # Diff Testing
 
@@ -155,8 +189,9 @@ gene_counts %>% as_tibble(rownames = 'Gene') %>%
   coord_flip()
 ```
 
+# Enrichment Analysis (GO and Pathway)
 
-# GO Enrichment of A vs B
+## GO Enrichment of A vs B
 ```{r}
 library(clusterProfiler)
 library(enrichplot)
@@ -183,22 +218,57 @@ p1
 
 ```
 
-# Enrichment Analysis (GO and Pathway)
+### "CNET" Plot
+Relationships between related GO terms with shared genes
+```{r, fig.width=6, fig.height=4}
+geneList <- eg_diff_genes$log2FoldChange
+names(geneList) <- eg_diff_genes$Gene
+cnet <- cnetplot(ego, foldChange = geneList) + scale_color_viridis_c(name = 'log2(FoldChange)')
+cnet
+```
+
+### Enriched GO Term Relationships
+Shows the "sets" of GO terms to increase understanding of what the diff gene sets are doing. There are many related GO terms.
+```{r, fig.width=4}
+go_term_relationships <- emapplot(ego,layout="kk") #+ ggtitle("Enriched GO Term Relationships")
+go_term_relationships
+```
 ## Wikipathways
 ```{r}
-system("wget https://wikipathways-data.wmcloud.org/current/gmt/wikipathways-20210610-gmt-Homo_sapiens.gmt")
-wp2gene <- read.gmt('wikipathways-20210610-gmt-Homo_sapiens.gmt')
+# system("wget https://wikipathways-data.wmcloud.org/current/gmt/wikipathways-20211110-gmt-Homo_sapiens.gmt")
+wp2gene <- read.gmt('wikipathways-20211110-gmt-Homo_sapiens.gmt')
 wp2gene <- wp2gene %>% tidyr::separate(term, c("name","version","wpid","org"), "%")
 wpid2gene <- wp2gene %>% dplyr::select(wpid, gene) #TERM2GENE
 wpid2name <- wp2gene %>% dplyr::select(wpid, name) #TERM2NAME
 
-ewp <- enricher(eg_diff_genes$ENTREZID, 
-                TERM2GENE = wpid2gene, 
-                TERM2NAME = wpid2name, 
+ewp <- enricher(eg_diff_genes$ENTREZID,
+                TERM2GENE = wpid2gene,
+                TERM2NAME = wpid2name,
                 pvalueCutoff = 0.1)
 
 ewp_plot <- dotplot(ewp, showCategory=30) + ggtitle("Dotplot for WikiPathways")
 ewp_plot
+```
+
+
+## GSEA
+```{r}
+all_genes <- bitr(A_vs_B %>% as_tibble(rownames = 'Gene') %>% pull(Gene), fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Hs.eg.db")
+all_genes <- all_genes %>% left_join(A_vs_B %>% as_tibble(rownames = 'SYMBOL'), by = c('SYMBOL'))
+
+logFC <- all_genes$log2FoldChange
+names(logFC) <- all_genes$ENTREZID
+logFC <- na.omit(logFC)
+
+logFC = sort(logFC, decreasing = TRUE)
+
+gse <- gseGO(geneList=logFC,
+             ont ="ALL",
+             keyType = "ENTREZID",
+             pvalueCutoff = 0.05,
+             OrgDb = org.Hs.eg.db,
+             pAdjustMethod = "BH")
+dotplot(gse, showCategory=10, split=".sign") + facet_grid(.~.sign)
 ```
 
 ## KEGG Pathway Enrichment
@@ -210,21 +280,6 @@ kk <- enrichKEGG(gene         = eg_diff_genes$ENTREZID,
 dotplot(kk) + ggtitle("KEGG Pathway Enrichment") 
 ```
 
-## "CNET" Plot
-Relationships between related GO terms with shared genes
-```{r, fig.width=6, fig.height=4}
-geneList <- eg_diff_genes$log2FoldChange
-names(geneList) <- eg_diff_genes$Gene
-cnet <- cnetplot(ego, foldChange = geneList) + scale_color_viridis_c(name = 'log2(FoldChange)')
-cnet
-```
-
-## Enriched GO Term Relationships
-Shows the "sets" of GO terms to increase understanding of what the diff gene sets are doing. There are many related GO terms.
-```{r, fig.width=4}
-go_term_relationships <- emapplot(ego,layout="kk") #+ ggtitle("Enriched GO Term Relationships")
-go_term_relationships
-```
 
 # Session Info
 ```{r}
