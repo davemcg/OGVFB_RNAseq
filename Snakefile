@@ -126,9 +126,9 @@ rule salmon_index:
 
 rule STAR_index:
 	input:
-		config['annotation_path'] + 'gencode.v' + config['gencode_version'] + '.pc_transcripts.fa.gz'
+		config['annotation_path'] + config['genome']	
 	output:
-		directory(config['annotation_path'] + 'STAR_index_gencode.v' + config['gencode_version'] + '.pc_transcripts_STAR275')
+		directory(config['annotation_path'] + config['genome'] + '_STAR275')
 	threads: 16
 	conda: 'OGVFB_RNAseq.yml'
 	shell:
@@ -166,7 +166,7 @@ rule salmon_quant:
 
 rule STAR_align:
 	input:
-		index = config['annotation_path'] + 'STAR_index_gencode.v' + config['gencode_version'] + '.pc_transcripts_STAR275',
+		index = config['annotation_path'] + config['genome'] + '_STAR275',
 		r1 = lambda wildcards: fastq_by_sample(wildcards.sample, 'Forward'),
 		r2 = lambda wildcards: fastq_by_sample(wildcards.sample, 'Reverse')
 	output:
