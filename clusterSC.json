@@ -8,10 +8,10 @@
 		"output"  : "00log/{rule}_{wildcards}.out",
 		"error" : "00log/{rule}_{wildcards}.err" 
 	},
-	"extract_umap":
+	"quick_process":
 	{
-		"partition" : "quick",
-		"mem" : "32G",
-		"time" : "00:30:00"
+		"partition" : "norm",
+		"mem" : "80G",
+		"time" : "12:00:00"
 	}
 }

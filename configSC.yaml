@@ -1,3 +1,9 @@
-cellranger_version: 'cellranger/3.0.2'
-expected_cells: '7000'
-transcriptome: 'GRCh38_GFP_RFP'
+cellranger_version: 'cellranger/7.0.1'
+expected_cells: '3000'
+transcriptome: '$CELLRANGER_REF/refdata-gex-mm10-2020-A'
+samples: ['HC32YDSX5_19378197','HC32YDSX5_19378200','HC32YDSX5_19378194','HC32YDSX5_19378212','HC32YDSX5_19378206','HC32YDSX5_19378191','HC32YDSX5_19378215','HC32YDSX5_19378209','HC32YDSX5_19378203'] 
+sample_info: 'sample_info.csv'
+dims: [6,8,10,20]
+hvg: [500, 1000, 2000]
+subsets: ['1,2,3','4,5,6','7,8,9','1,2,3,4,5,6,7,8,9']
+git_dir: '/home/mcgaugheyd/git/OGVFB_RNAseq'

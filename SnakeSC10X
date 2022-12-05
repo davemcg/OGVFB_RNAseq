@@ -1,9 +1,10 @@
+git_dir = config['git_dir']
 rule all:
 	input:
-		expand('umap/seurat_dims{dims}_nneighbors{nneighbors}_mindist{dist}.umap.Rdata', \
-					dims = [10,20,30], \
-					nneighbors = [30,60], \
-					dist = [0.1, 0.3]),
+		expand('data/bioc_dims{dims}_hvg{hvg}_subset{subsets}.obj.Rdata', \
+					dims = config['dims'], \
+					hvg = config['hvg'], \
+					subsets = config['subsets']),
 		expand('fastqc/{tag}/possorted_genome_bam_fastqc.html', tag = config['samples'])
 # cellranger mkref --genome=GRCh38_GFP_RFP --fasta=reference_cellranger-GRCh38-1.2.0_plus_GFP/genome_GFP_RFP.fa --genes reference_cellranger-GRCh38-1.2.0_plus_GFP/genes_GFP_RFP.gtf --nthreads=10
 
@@ -19,7 +20,7 @@ rule call:
 		'fastq/'
 	output:
 		'{tag}/outs/cloupe.cloupe'
-	threads: 24
+	threads: 8 
 	shell:
 		"""
 		mkdir -p {wildcards.tag}
@@ -66,32 +67,19 @@ rule aggr:
 		cellranger aggr --id={params.folder} --csv={input.csv} --localcores {threads} --localmem 30
 		"""
 
-rule make_seurat:
+rule quick_process:
 	input:
 		'aggr/outs/count/cloupe.cloupe'
 	output:
-		'data/seurat_dims{dims}_nneighbors{nneighbors}_mindist{dist}.obj.Rdata'
+		'data/bioc_dims{dims}_hvg{hvg}_subset{subsets}.obj.Rdata'
+	threads: 4
 	shell:
 		"""
-		module load R/3.6
-		Rscript /src/make_seurat.R merged_2nd_round/outs/filtered_feature_bc_matrix/ \
+		module load R/4.1
+		Rscript {git_dir}/src/scRNA_quick_start.R \
+			{wildcards.hvg} \
 			{wildcards.dims} \
-			{wildcards.nneighbors} \
-			{wildcards.dist} \
-			{output}
+			{output} \
+			{wildcards.subsets}
 		"""
 
-rule extract_umap:
-	input:
-		'data/seurat_dims{dims}_nneighbors{nneighbors}_mindist{dist}.obj.Rdata'
-	output:
-		'umap/seurat_dims{dims}_nneighbors{nneighbors}_mindist{dist}.umap.Rdata'
-	shell:
-		"""
-		module load R/3.6
-		Rscript /home/mcgaugheyd/git/iPSC_RPE_differentiation/src/extract_umap.R {input} \
-			{wildcards.dims} \
-			{wildcards.nneighbors} \
-			{wildcards.dist} \
-			{output}
-		"""
