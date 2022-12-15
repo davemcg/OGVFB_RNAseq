@@ -1,0 +1,310 @@
+---
+title: "Generic Analysis Template"
+date: "2022-12-07"
+output: 
+  html_notebook:
+    author: "David McGaughey"
+    theme: flatly
+    toc: true
+    toc_float: true
+    code_folding: hide
+---
+# Introduction
+
+Rough workflow (done with https://github.com/davemcg/OGVFB_RNAseq/blob/master/src/scRNA_quick_start.R):
+
+1. CellRanger to do quantitation (reduce the raw sequence to gene counts by cell)
+2. Aggregate all counts across all samples into one matrix
+3. Select top N (2000 in this case) highly variable genes to use for the PCA (using all genes is SLOW and often counterproductive)
+4. PCA to identify major axes of variation - use top 10 PC
+5. Clustering on the 10 PC
+6. UMAP visualization to reduce the 10 PC to 2 dimensions for our puny brains
+
+# Load Data
+```{r}
+library(HDF5Array)
+library(scran)
+library(tidyverse)
+h5closeAll()
+load('~/data/PATH/bioc_dims10_hvg2000_subset1,2,3,4,5,6.obj.Rdata')
+sce <- loadHDF5SummarizedExperiment('~/data/PATH/bioc_dims10_hvg2000_subset1,2,3,4,5,6')
+
+system('mkdir -p ../data')
+
+umap <- reducedDim(sce,"UMAP")
+colnames(umap) <- c("UMAP_1","UMAP_2")
+write_csv(bind_cols(colData(sce) %>% as_tibble() %>% select(Barcode), umap %>% as_tibble) %>% relocate(Barcode, UMAP_1, UMAP_2),
+          file = '../data/all_umap.csv')
+write_csv(bind_cols(colData(sce) %>% as_tibble() %>% select(Barcode, cluster)),
+          file = '../data/all_info.csv')
+```
+
+# Accounting
+
+## Cell Counts per Time Point
+Pre and post high mito percentage filtering 
+```{r, fig.width=5}
+
+# grep on the ending digit of the barcode which matches the 10x cellranger naming pattern
+# order of the "sample_info.csv" sheet used in cellranger is how you align
+# obviously alter this
+bind_rows(
+  colData(sce_full) %>% 
+    as_tibble() %>% 
+    mutate(Sample = case_when(grepl('1$', Barcode) ~ 'WT_untreated_RPE', 
+                              grepl('2$', Barcode) ~ 'ABCA4_baseline_RPE', 
+                              grepl('3$', Barcode) ~ 'WT_800mg_RPEch',
+                              grepl('4$', Barcode) ~ 'ABCA4_400mg_RPE',
+                              grepl('5$', Barcode) ~ 'ABCA4_0mg_RPE',
+                              grepl('6$', Barcode) ~ 'ABCA4_800mg_RPE')) %>% 
+    group_by(Sample) %>% 
+    summarise(Count = n()) %>% 
+    mutate(QC = 'All Cells'),
+  colData(sce) %>% 
+    as_tibble() %>% 
+    mutate(Sample = case_when(grepl('1$', Barcode) ~ 'WT_untreated_RPE', 
+                              grepl('2$', Barcode) ~ 'ABCA4_baseline_RPE', 
+                              grepl('3$', Barcode) ~ 'WT_800mg_RPEch',
+                              grepl('4$', Barcode) ~ 'ABCA4_400mg_RPE',
+                              grepl('5$', Barcode) ~ 'ABCA4_0mg_RPE',
+                              grepl('6$', Barcode) ~ 'ABCA4_800mg_RPE')) %>% 
+    group_by(Sample) %>% 
+    summarise(Count = n()) %>% 
+    mutate(QC = 'High Mito % Filtering')) %>% 
+  ggplot(aes(x=Sample, y = Count, fill = QC)) +
+  geom_bar(stat='identity', position = position_dodge2()) +
+  geom_text(aes(label = Count, y = Count + 1000), position = position_dodge(width = 0.9)) + 
+  cowplot::theme_cowplot() +
+  xlab('Sample') +
+  ylab("Cell Count") +
+  coord_flip()
+```
+
+## Cell Stage Estimation per Time Point
+
+```{r}
+colData(sce) %>% 
+  as_tibble() %>% 
+  mutate(Sample = case_when(grepl('1$', Barcode) ~ 'WT_untreated_RPE', 
+                            grepl('2$', Barcode) ~ 'ABCA4_baseline_RPE', 
+                            grepl('3$', Barcode) ~ 'WT_800mg_RPEch',
+                            grepl('4$', Barcode) ~ 'ABCA4_400mg_RPE',
+                            grepl('5$', Barcode) ~ 'ABCA4_0mg_RPE',
+                            grepl('6$', Barcode) ~ 'ABCA4_800mg_RPE')) %>% 
+  group_by(Sample, tricycleStage) %>% 
+  summarise(Count = n()) %>% mutate(Ratio = Count / sum(Count)) %>% 
+  ggplot(aes(x=Sample,y=Ratio, fill = tricycleStage)) + geom_bar(stat = 'identity') +
+  cowplot::theme_cowplot() + 
+  xlab("Sample") +
+  coord_flip()
+```
+
+
+# PCA
+
+## Amount of variance explained by each PC
+```{r}
+reducedDim(sce, 'PCA') %>% attr(., 'percentVar') %>% enframe() %>% 
+  ggplot(aes(x=name,y=value)) + 
+  geom_bar(stat='identity') +
+  cowplot::theme_cowplot() +
+  xlab("PC") + ylab("Percent Variance Explained") +
+  scale_x_continuous(breaks=seq(1, 10, 1))
+```
+
+## Top 20 genes
+Top 10 for each direction of the 10 PC
+
+Useful for quickly seeing what the major axes of variation are coming from. Also if there is a set of genes which you *a prior* know to be useful and you see them in a certain PC, then the *other* genes are of interest. 
+```{r, fig.width=6, fig.height=4}
+bind_rows(reducedDim(sce, 'PCA') %>% attr(., 'rotation') %>% as_tibble(rownames = 'X1') %>% pivot_longer(-X1)  %>% group_by(name) %>% slice_max(order_by = value, n= 10),
+          reducedDim(sce, 'PCA') %>% attr(., 'rotation') %>% as_tibble(rownames = 'X1') %>% pivot_longer(-X1)  %>% group_by(name) %>% slice_min(order_by = value, n= 10)) %>% 
+  mutate(PC = str_extract(name, '\\d+') %>% as.integer()) %>% 
+  left_join(features) %>% 
+  ggplot(aes(x=forcats::fct_reorder(X2, value), y= value)) +
+  geom_point(stat='identity') +
+  cowplot::theme_cowplot() + 
+  coord_flip() +
+  xlab("Gene") +
+  facet_wrap(~PC, ncol =5, scales = 'free')
+```
+
+
+```{r}
+# calculate top markers by cluster
+top_markers_by_cluster <- list()
+for (i in names(markers)){
+  top_markers_by_cluster[[i]] <- markers[[i]] %>% 
+    as_tibble(rownames = 'X1') %>%
+    arrange(-mean.AUC) %>% 
+    head(3) %>% 
+    left_join(features, by ='X1') %>% 
+    relocate(X2) %>% 
+    pull(X2) %>% 
+    paste(collapse = ', ')
+}
+top_markers_by_cluster <- top_markers_by_cluster %>% unlist() %>% enframe()
+names(top_markers_by_cluster) <- c('cluster', 'Top 3 Genes')
+
+# export marker results to excel
+export_markers_by_cluster <- list()
+for (i in names(markers)){
+  export_markers_by_cluster[[i]] <- markers[[i]] %>% as_tibble(rownames = 'X1') %>%left_join(features, by ='X1') %>% 
+    relocate(X2) %>% arrange(-mean.logFC.cohen) %>% head(100)
+}
+write_csv(export_markers_by_cluster %>% bind_rows(.id = 'cluster'),
+          file = '../data/markers_by_cluster.csv')
+
+# top cell cycle stage by cluster
+cluster_cycle <- 
+  colData(sce) %>% 
+  as_tibble() %>% 
+  group_by(cluster, tricycleStage) %>% summarise(Count = n()) %>% 
+  mutate(Ratio = Count / sum(Count),
+         tricycleStage = paste0(tricycleStage, ' (', format(Ratio, digits = 2), ')')) %>% 
+  slice_max(order_by = Ratio, n = 1) %>% select(cluster, tricycleStage)
+
+cluster_count <- colData(sce) %>% 
+  as_tibble() %>% 
+  group_by(cluster) %>% summarise(Count = n()) %>% 
+  mutate(cluster = as.integer(cluster))
+```
+
+# Cluster Characteristics
+If a certain sample is more than 70% of a cluster, it gets labelled
+```{r}
+top_markers_by_cluster %>% 
+  left_join(
+    colData(sce) %>% 
+      as_tibble() %>% 
+      mutate(Sample = case_when(grepl('1$', Barcode) ~ 'WT_untreated_RPE', 
+                                grepl('2$', Barcode) ~ 'ABCA4_baseline_RPE', 
+                                grepl('3$', Barcode) ~ 'WT_800mg_RPEch',
+                                grepl('4$', Barcode) ~ 'ABCA4_400mg_RPE',
+                                grepl('5$', Barcode) ~ 'ABCA4_0mg_RPE',
+                                grepl('6$', Barcode) ~ 'ABCA4_800mg_RPE')) %>% 
+      group_by(cluster, Sample) %>% summarise(Count = n()) %>% 
+      mutate(Ratio = Count / sum(Count)), 
+    by = 'cluster') %>%  
+  mutate(dominantSample = case_when(Ratio > 0.7 ~ Sample)) %>% 
+  ungroup() %>% 
+  group_by(cluster) %>%  
+  slice_max(order_by = 'Ratio', n = 1) %>% 
+  ungroup() %>% 
+  select(-Sample, -Count, -Ratio) %>% 
+  unique() %>% 
+  left_join(cluster_cycle, by = 'cluster') %>% 
+  mutate(cluster = as.integer(cluster)) %>% 
+  arrange(cluster) %>% 
+  left_join(cluster_count, by = 'cluster') %>% 
+  DT::datatable()
+
+```
+
+# RPE clusters
+Which cluster(s) are enriched in Rpe65 and Ttr? We do a quick and dirty metric by ranking genes for each cluster by average AUC (area under the curve, which is a metric that calculates how specific a gene expression is for distinguishing one cluster vs. another). If the mean rank is low then the genes are more highly expressed in that cluster relative to the others.
+```{r}
+x <- list()
+for (i in names(markers)){x[[i]] <- markers[[i]] %>% as_tibble(rownames = 'X1') %>% left_join(features, by = 'X1') %>% relocate(X2) %>% mutate(cluster = i)}
+big_markers <- bind_rows(x)
+
+big_markers %>% 
+  group_by(cluster) %>% 
+  mutate(auc_rank = dense_rank(-mean.AUC)) %>% 
+  filter(X2 %in%  c('Rpe65','Ttr')) %>% 
+  arrange(auc_rank) %>% 
+  relocate(cluster) %>% 
+  ungroup() %>% 
+  group_by(cluster) %>% 
+  summarise(Rank = as.integer(mean(auc_rank) / 3)) %>% 
+  arrange(Rank)
+```
+
+# UMAP
+## Color by cluster
+Each cluster labelled with the top 3 genes over-expressed (relative to all other cells) in each
+
+```{r, fig.width=6, fig.height=6}
+cluster_coords <- cbind(reducedDim(sce, 'UMAP'), colData(sce)) %>% 
+  as_tibble() %>% 
+  group_by(cluster) %>% 
+  summarise(UMAP_1 = mean(V1), UMAP_2 = mean(V2))
+
+
+labelled_cluster <- cluster_coords %>% left_join(top_markers_by_cluster, by = 'cluster') %>% mutate(cluster2 = paste0(cluster, ": ", `Top 3 Genes`))
+
+cbind(reducedDim(sce, 'UMAP'), colData(sce)) %>% as_tibble() %>% 
+  left_join(labelled_cluster, by = 'cluster') %>% 
+  ggplot(aes(x=V1, y = V2, color = cluster2)) + 
+  scattermore::geom_scattermore() + 
+  cowplot::theme_cowplot() +
+  scale_color_manual(values = c(pals::alphabet(), pals::alphabet2(), pals::glasbey()) %>% unname()) +
+  ggrepel::geom_label_repel(data = labelled_cluster, 
+                            aes(x=UMAP_1, y = UMAP_2, label = cluster2)) +
+  theme(legend.position = "none") +
+  xlab("UMAP 1") + ylab("UMAP 2") 
+
+```
+
+
+## Color by Cluster, Split by sample
+
+```{r, fig.width=6, fig.height=3}
+cbind(reducedDim(sce, 'UMAP'), colData(sce)) %>% as_tibble() %>% 
+  left_join(labelled_cluster, by = 'cluster') %>% 
+  mutate(Sample = case_when(grepl('1$', Barcode) ~ 'WT_untreated_RPE', 
+                            grepl('2$', Barcode) ~ 'ABCA4_baseline_RPE', 
+                            grepl('3$', Barcode) ~ 'WT_800mg_RPEch',
+                            grepl('4$', Barcode) ~ 'ABCA4_400mg_RPE',
+                            grepl('5$', Barcode) ~ 'ABCA4_0mg_RPE',
+                            grepl('6$', Barcode) ~ 'ABCA4_800mg_RPE')) %>% 
+  ggplot(aes(x=V1, y = V2, color = cluster2)) + 
+  scattermore::geom_scattermore(pointsize = 2) + 
+  cowplot::theme_cowplot() +
+  scale_color_manual(values = c(pals::alphabet(), pals::alphabet2(), pals::glasbey()) %>% unname()) +
+  theme(legend.position = "none") +
+  xlab("UMAP 1") + ylab("UMAP 2")  + 
+  facet_wrap(~Sample)
+```
+
+
+## Colored by imputed cell cycle 
+
+```{r, fig.width=3, fig.height=2}
+
+cbind(reducedDim(sce, 'UMAP'), colData(sce)) %>% as_tibble() %>% 
+  left_join(labelled_cluster, by = 'cluster') %>% 
+  ggplot(aes(x=V1, y = V2)) + 
+  scattermore::geom_scattermore(aes(color = tricycleStage), pointsize = 1.1) + 
+  cowplot::theme_cowplot() +
+  scale_color_manual(values = c(pals::alphabet(), pals::alphabet2(), pals::glasbey()) %>% unname()) +
+  
+  xlab("UMAP 1") + ylab("UMAP 2") 
+
+```
+
+# David picks some genes to plot
+```{r}
+for (gene in c('Rpe65', 'Mitf','Rho', 'Crx', 'Pax6')){
+  print(cbind(reducedDim(sce, 'UMAP'),
+              colData(sce), 
+              assay(sce, 'logcounts')[features %>% filter(X2 == gene) %>% pull(X1),] %>% enframe()) %>% 
+          as_tibble() %>% 
+          filter(value > 0) %>% 
+          ggplot(aes(x=V1,y=V2, color = value)) +
+          scattermore::geom_scattermore(data = data.frame(reducedDim(sce, 'UMAP')), aes(x = X1, y = X2),color = 'gray') +
+          scattermore::geom_scattermore(pointsize = 1) +
+          scale_color_viridis_c() +
+          cowplot::theme_cowplot() +
+          xlab("UMAP 1") + ylab("UMAP 2") +
+          labs(color='log(counts)') +
+          ggtitle(gene)
+  )
+}
+```
+
+
+# Session Info
+```{r}
+devtools::session_info()
+```
