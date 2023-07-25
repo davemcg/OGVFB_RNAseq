@@ -36,7 +36,7 @@ anno_tximport <- anno %>%
 # Import quant at gene level
 ```{r, message=FALSE, message=FALSE, warning=FALSE}
 txi <- tximport(files, type = "salmon", tx2gene = anno_tximport)
-txi.deseq2 <- data.frame(txi$counts)
+tpm <- txi$abundance
 ```
 
 # Metadata
@@ -131,7 +131,7 @@ Run Diff Testing with a contrast to remove one of the treatments
 # DE time
 #########
 
-design(dds) <- formula(~ type + condition)
+design(dds) <- formula(~treatment + batch)
 dds <- DESeq(dds)
 A_vs_B <- results(dds, contrast = c('treatment','A','B'))
 
@@ -218,6 +218,11 @@ p1
 
 ```
 
+### Table
+```{r}
+ego@result %>% DT::datatable()
+```
+
 ### "CNET" Plot
 Relationships between related GO terms with shared genes
 ```{r, fig.width=6, fig.height=4}
@@ -232,6 +237,11 @@ Shows the "sets" of GO terms to increase understanding of what the diff gene set
 ```{r, fig.width=4}
 go_term_relationships <- emapplot(ego,layout="kk") #+ ggtitle("Enriched GO Term Relationships")
 go_term_relationships
+```
+
+### Heatmap of top 3 terms
+```{r, fig.height=5, fig.width=3}
+
 ```
 ## Wikipathways
 ```{r}
