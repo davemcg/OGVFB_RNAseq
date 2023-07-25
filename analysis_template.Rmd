@@ -2,6 +2,8 @@
 title: "Analysis \"Template\""
 output: 
   html_notebook:
+    author: "David McGaughey"
+    date: `r Sys.Date()`
     theme: flatly
     toc: true
     toc_float: true
@@ -20,7 +22,6 @@ library(clusterProfiler)
 # Parallel
 library(BiocParallel)
 register(MulticoreParam(6))
-#working_dir <- '/Volumes/ARC168/PROJECTS/hufnagel/macaque_fovea_RNA-seq/salmon_quant/'
 working_dir <- '~/data/project/salmon_quant/'
 files <- list.files(path=working_dir,recursive=TRUE,pattern='quant.sf', full.names = TRUE)
 ```
@@ -95,6 +96,33 @@ Here are the genes which contribute most to this PC:
 PCA$rotation %>% as_tibble(rownames = 'Gene') %>% arrange(-abs(PC2)) %>% dplyr::select(Gene,PC2) %>% head(50) %>% DT::datatable()
 ```
 
+## Visualize Loadings
+```{r}
+pcFirst <- 'PC1'
+pcSecond <- 'PC2'
+rotations <- c(pcFirst, pcSecond)
+rotation_multipler <- 100 # arbitrary value to make the loading vectors about the right size on the plot
+# rotations for pc1 and pc2
+top_rotations <- 
+  c(PCA$rotation[,str_extract(pcFirst, '\\d+') %>% as.integer()] %>% sort() %>% head(3) %>% names(),
+    PCA$rotation[,str_extract(pcFirst, '\\d+') %>% as.integer()] %>% sort() %>% tail(3) %>% names(),
+    PCA$rotation[,str_extract(pcSecond, '\\d+') %>% as.integer()] %>% sort() %>% head(3) %>% names(),
+    PCA$rotation[,str_extract(pcSecond, '\\d+') %>% as.integer()] %>% sort() %>% tail(3) %>% names()) %>% 
+  unique()
+
+dataGG %>%
+  as_tibble() %>% 
+  ggplot(., aes(.data[[pcFirst]], .data[[pcSecond]])) +
+  geom_point(size=3, aes(color=line, shape = treatment)) +
+  geom_segment(data = PCA$rotation[top_rotations,rotations] %>% data.frame(), aes(x=0,y=0, xend = .data[[pcFirst]]*rotation_multipler, yend = .data[[pcSecond]]*rotation_multipler)) +
+  ggrepel::geom_label_repel(data = PCA$rotation[top_rotations,rotations] %>% 
+                              as_tibble(rownames = 'Gene') %>% 
+                              mutate(Gene = gsub(' \\(.*','',Gene)), 
+                            aes(x=.data[[pcFirst]]*rotation_multipler, y = .data[[pcSecond]] * rotation_multipler, label = Gene)) +
+  xlab(paste0(pcFirst, ": ",percentVar[str_extract(pcFirst, '\\d+') %>% as.integer()],"% variance")) +
+  ylab(paste0(pcSecond, ": ",percentVar[str_extract(pcSecond, '\\d+') %>% as.integer()],"% variance")) + 
+  cowplot::theme_cowplot() 
+```
 
 # Heatmap
 Run clustering on sample <-> sample distances
@@ -133,16 +161,17 @@ Run Diff Testing with a contrast to remove one of the treatments
 
 design(dds) <- formula(~treatment + batch)
 dds <- DESeq(dds)
-A_vs_B <- results(dds, contrast = c('treatment','A','B'))
+res <- results(dds, contrast = c('treatment','A','B'))
 
-A_vs_B_LFC <- lfcShrink(dds, coef = "treatment_A_vs_B", type = 'apeglm')
-plotMA(A_vs_B_LFC)
+resLFC <- lfcShrink(dds, coef = "treatment_A_vs_B", type = 'apeglm')
+plotMA(resLFC)
+resLFC$pvalue %>% hist() %>% plot()
 ```
 
-## A vs B
+## Results
 Positive is genes that are more expressed in A vs B
 ```{r}
-A_vs_B %>%  as_tibble(rownames = 'Gene') %>% arrange(padj) %>% head(2000) %>% DT::datatable()
+resLFC %>%  as_tibble(rownames = 'Gene') %>% arrange(padj) %>% head(2000) %>% DT::datatable()
 ```
 ## Volcano Plot
 On the right is genes that are more expressed in A vs B
@@ -169,19 +198,20 @@ volcano_maker <- function(df, title="Volcano Plot", pvalue='pvalue', padj='padj'
   plot
 }
 
-volcano_maker(df = A_vs_B %>% as_tibble(rownames = 'Gene')) + coord_cartesian(xlim = c(-5,5))
+volcano_maker(df = resLFC %>% as_tibble(rownames = 'Gene')) + coord_cartesian(xlim = c(-5,5))
 ```
 
 ## Dot Plots of Select Genes
-```{r}
-colnames(gene_counts) <- meta$value
-plot_genes <- bind_rows(subset(A_vs_B %>% as_tibble(rownames = 'Gene'), padj<0.01 & baseMean > 500) %>% arrange((log2FoldChange)) %>% head(5), 
-                        subset(A_vs_B %>% as_tibble(rownames = 'Gene'), padj<0.01 & baseMean > 500) %>% arrange((log2FoldChange)) %>% tail(5)) %>% pull(Gene)
-gene_counts %>% as_tibble(rownames = 'Gene') %>% 
-  pivot_longer(cols = AMDCD_A_1:TJP1_B_3) %>% 
+```{r, fig.width=5, fig.height=3}
+gene_TPM <- txi$abundance
+colnames(gene_TPM) <- meta$value
+plot_genes <- bind_rows(subset(resLFC %>% as_tibble(rownames = 'Gene'), padj<0.01 & baseMean > 500 & log2FoldChange > 1) %>% arrange((padj)) %>% head(10), 
+                        subset(resLFC %>% as_tibble(rownames = 'Gene'), padj<0.01 & baseMean > 500 & log2FoldChange < -1) %>% arrange((padj)) %>% head(10)) %>% pull(Gene)
+gene_TPM %>% as_tibble(rownames = 'Gene') %>% 
+  pivot_longer(-Gene) %>% 
   left_join(meta, by = c('name' = 'value')) %>% 
   filter(Gene %in% plot_genes) %>% 
-  ggplot(aes(x=treatment, y = log2(value), color = treatment)) + 
+  ggplot(aes(x=Condition, y = log2(value), color = name)) + 
   geom_boxplot(color = 'black') +
   geom_point() + 
   facet_wrap(~Gene) +
@@ -191,18 +221,18 @@ gene_counts %>% as_tibble(rownames = 'Gene') %>%
 
 # Enrichment Analysis (GO and Pathway)
 
-## GO Enrichment of A vs B
+## GO Enrichment 
 ```{r}
 library(clusterProfiler)
 library(enrichplot)
 
 
-diff_genes <- A_vs_B %>% as_tibble(rownames = 'Gene') %>% filter(padj < 0.01, abs(log2FoldChange) > 1) 
+diff_genes <- resLFC %>% as_tibble(rownames = 'Gene') %>% filter(padj < 0.01, abs(log2FoldChange) > 1) 
 eg_diff_genes <- bitr(diff_genes$Gene, fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Hs.eg.db")
 eg_diff_genes <- diff_genes %>% left_join(., eg_diff_genes, by = c('Gene' = 'SYMBOL'))
-eg_universe = bitr(A_vs_B %>% as_tibble(rownames = 'Gene') %>% pull(Gene), fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Hs.eg.db")
-
-
+# only keep genes that have a mean of >= 10 reads across all sample
+expressed <- txi$counts[txi$counts %>% rowMeans() > 10,] %>% row.names()
+eg_universe = bitr(resLFC %>% as_tibble(rownames = 'Gene') %>% filter(Gene %in% expressed) %>% pull(Gene), fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Hs.eg.db")
 ego <- enrichGO(gene          = eg_diff_genes$ENTREZID,
                 universe      = eg_universe$ENTREZID,
                 OrgDb         = org.Hs.eg.db,
@@ -211,11 +241,17 @@ ego <- enrichGO(gene          = eg_diff_genes$ENTREZID,
                 pvalueCutoff  = 0.01,
                 qvalueCutoff  = 0.05,
                 readable      = TRUE)
+```
 
+```{r, fig.width=3, fig.height=5}
 p1 <- dotplot(ego, showCategory=30) + ggtitle("Dotplot for GO")
 p1
+```
 
-
+### Table
+```{r}
+ego <- setReadable(ego, OrgDb = org.Hs.eg.db, keyType = 'ENTREZID')
+ego@result %>% DT::datatable()
 ```
 
 ### Table
@@ -234,8 +270,9 @@ cnet
 
 ### Enriched GO Term Relationships
 Shows the "sets" of GO terms to increase understanding of what the diff gene sets are doing. There are many related GO terms.
-```{r, fig.width=4}
-go_term_relationships <- emapplot(ego,layout="kk") #+ ggtitle("Enriched GO Term Relationships")
+```{r, fig.width=8, fig.height=8}
+ego_pair <- pairwise_termsim(ego) 
+go_term_relationships <- emapplot(ego_pair,layout="kk") #+ ggtitle("Enriched GO Term Relationships")
 go_term_relationships
 ```
 
@@ -245,40 +282,64 @@ go_term_relationships
 ```
 ## Wikipathways
 ```{r}
-# system("wget https://wikipathways-data.wmcloud.org/current/gmt/wikipathways-20211110-gmt-Homo_sapiens.gmt")
-wp2gene <- read.gmt('wikipathways-20211110-gmt-Homo_sapiens.gmt')
+# system("wget https://wikipathways-data.wmcloud.org/current/gmt/wikipathways-20230210-gmt-Homo_sapiens.gmt")
+wp2gene <- read.gmt('wikipathways-20230210-gmt-Homo_sapiens.gmt')
 wp2gene <- wp2gene %>% tidyr::separate(term, c("name","version","wpid","org"), "%")
 wpid2gene <- wp2gene %>% dplyr::select(wpid, gene) #TERM2GENE
 wpid2name <- wp2gene %>% dplyr::select(wpid, name) #TERM2NAME
-
 ewp <- enricher(eg_diff_genes$ENTREZID,
                 TERM2GENE = wpid2gene,
                 TERM2NAME = wpid2name,
                 pvalueCutoff = 0.1)
-
 ewp_plot <- dotplot(ewp, showCategory=30) + ggtitle("Dotplot for WikiPathways")
-ewp_plot
 ```
 
+```{r, fig.width=4, fig.height=3}
+ewp_plot
+```
+### Table
+```{r}
+ewp <- setReadable(ewp, OrgDb = org.Hs.eg.db, keyType = 'ENTREZID')
+ewp@result %>% DT::datatable()
+```
 
 ## GSEA
 ```{r}
-all_genes <- bitr(A_vs_B %>% as_tibble(rownames = 'Gene') %>% pull(Gene), fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Hs.eg.db")
-all_genes <- all_genes %>% left_join(A_vs_B %>% as_tibble(rownames = 'SYMBOL'), by = c('SYMBOL'))
-
+all_genes <- bitr(resLFC %>% as_tibble(rownames = 'Gene') %>% filter(Gene %in% expressed) %>% pull(Gene), fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Hs.eg.db")
+all_genes <- all_genes %>% left_join(resLFC %>% as_tibble(rownames = 'SYMBOL'), by = c('SYMBOL'))
 logFC <- all_genes$log2FoldChange
 names(logFC) <- all_genes$ENTREZID
 logFC <- na.omit(logFC)
-
 logFC = sort(logFC, decreasing = TRUE)
-
 gse <- gseGO(geneList=logFC,
              ont ="ALL",
              keyType = "ENTREZID",
              pvalueCutoff = 0.05,
              OrgDb = org.Hs.eg.db,
              pAdjustMethod = "BH")
+```
+
+```{r, fig.width=4, fig.height=5}
 dotplot(gse, showCategory=10, split=".sign") + facet_grid(.~.sign)
+```
+
+### Table
+```{r}
+gse <- setReadable(gse, OrgDb = org.Hs.eg.db)
+gse@result %>% as_tibble() %>% arrange(p.adjust) %>% filter(p.adjust < 0.01) %>% DT::datatable()
+```
+
+
+### Heatmaps
+
+#### Extracellular Matrix (GO:0031012)
+```{r}
+relative <- log2(gene_TPM + 1) # add a pseudocount of 1 as log2(0) is infinity
+row_means <- rowMeans(relative)
+relative <- relative - row_means
+#relative_g <-  relative
+
+gene_set<- (gse@result %>% filter(ID == 'GO:0031012') %>% pull(core_enrichment) %>% str_split(., '\\/'))[[1]]
 ```
 
 ## KEGG Pathway Enrichment
@@ -288,6 +349,27 @@ kk <- enrichKEGG(gene         = eg_diff_genes$ENTREZID,
                  organism     = 'hsa',
                  pvalueCutoff = 0.1)
 dotplot(kk) + ggtitle("KEGG Pathway Enrichment") 
+```
+
+### Table
+```{r}
+kk <- setReadable(kk, OrgDb = org.Hs.eg.db, keyType = 'ENTREZID')
+kk@result %>% as_tibble() %>% arrange(p.adjust) %>% filter(p.adjust < 0.01) %>% DT::datatable()
+```
+
+### Focal Adhesion (hsa04510)
+```{r}
+gene_set<- (kk@result %>% filter(ID == 'hsa04510') %>% pull(geneID) %>% str_split(., '\\/'))[[1]]
+```
+
+```{r, fig.width=3, fig.height=3}
+hm_matrix <- relative[gene_set,]
+
+Heatmap(hm_matrix, 
+        cluster_columns = FALSE,
+        cluster_rows = TRUE, 
+        name = 'log2(Fold\nChange)', 
+        top_annotation = ha_column)
 ```
 
 

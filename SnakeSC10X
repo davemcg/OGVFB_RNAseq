@@ -5,6 +5,7 @@ rule all:
 					dims = config['dims'], \
 					hvg = config['hvg'], \
 					subsets = config['subsets']),
+		expand('seacells/{tag}.obs.csv.gz',  tag = config['samples']),
 		expand('fastqc/{tag}/possorted_genome_bam_fastqc.html', tag = config['samples'])
 # cellranger mkref --genome=GRCh38_GFP_RFP --fasta=reference_cellranger-GRCh38-1.2.0_plus_GFP/genome_GFP_RFP.fa --genes reference_cellranger-GRCh38-1.2.0_plus_GFP/genes_GFP_RFP.gtf --nthreads=10
 
@@ -33,6 +34,20 @@ rule call:
 			--transcriptome {config[transcriptome]} \
 			--localcores {threads} \
 			--localmem=30 
+		"""
+
+rule seacells:
+	input:
+		'{tag}/outs/cloupe.cloupe'
+	params:
+		h5 = '{tag}/outs/filtered_feature_bc_matrix.h5'
+	output:
+		'seacells/{tag}.obs.csv.gz',
+		'seacells/{tag}.seacell_aggr.csv.gz'
+	shell:
+		"""
+		mkdir -p seacells
+		/data/mcgaugheyd/conda/envs/seacells/bin/python /home/mcgaugheyd/git/OGVFB_RNAseq/src/seacell_maker.py {params.h5} {wildcards.tag} {output}
 		"""
 
 rule fastqc:
