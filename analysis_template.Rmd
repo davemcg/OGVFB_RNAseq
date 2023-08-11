@@ -3,7 +3,7 @@ title: "Analysis \"Template\""
 output: 
   html_notebook:
     author: "David McGaughey"
-    date: `r Sys.Date()`
+    date: "`r Sys.Date()`"
     theme: flatly
     toc: true
     toc_float: true
