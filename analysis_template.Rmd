@@ -48,11 +48,11 @@ meta <- meta %>% separate(value, into = c('line','treatment','biological_replica
 ```
 
 # Deseq2 time
-Treatment compared with line as a covariate
+Batch is a covariate. Testing against treatment. 
 
 VST norm for PCA
 ```{r, message=FALSE, message=FALSE, warning=FALSE}
-dds <- DESeqDataSetFromTximport(txi, meta, ~treatment + line)
+dds <- DESeqDataSetFromTximport(txi, meta, ~batch + treatment)
 
 DESeq2Table <- DESeq(dds, parallel = T)
 # rld <- rlogTransformation(DESeq2Table, blind=TRUE)
