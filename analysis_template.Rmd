@@ -3,7 +3,7 @@ title: "Analysis \"Template\""
 output: 
   html_notebook:
     author: "David McGaughey"
-    date: `r Sys.Date()`
+    date: "`r Sys.Date()`"
     theme: flatly
     toc: true
     toc_float: true
@@ -37,7 +37,7 @@ anno_tximport <- anno %>%
 # Import quant at gene level
 ```{r, message=FALSE, message=FALSE, warning=FALSE}
 txi <- tximport(files, type = "salmon", tx2gene = anno_tximport)
-txi.deseq2 <- data.frame(txi$counts)
+tpm <- txi$abundance
 ```
 
 # Metadata
@@ -48,11 +48,11 @@ meta <- meta %>% separate(value, into = c('line','treatment','biological_replica
 ```
 
 # Deseq2 time
-Treatment compared with line as a covariate
+Batch is a covariate. Testing against treatment. 
 
 VST norm for PCA
 ```{r, message=FALSE, message=FALSE, warning=FALSE}
-dds <- DESeqDataSetFromTximport(txi, meta, ~treatment + line)
+dds <- DESeqDataSetFromTximport(txi, meta, ~batch + treatment)
 
 DESeq2Table <- DESeq(dds, parallel = T)
 # rld <- rlogTransformation(DESeq2Table, blind=TRUE)
@@ -159,7 +159,7 @@ Run Diff Testing with a contrast to remove one of the treatments
 # DE time
 #########
 
-design(dds) <- formula(~ type + condition)
+design(dds) <- formula(~treatment + batch)
 dds <- DESeq(dds)
 res <- results(dds, contrast = c('treatment','A','B'))
 
@@ -254,6 +254,11 @@ ego <- setReadable(ego, OrgDb = org.Hs.eg.db, keyType = 'ENTREZID')
 ego@result %>% DT::datatable()
 ```
 
+### Table
+```{r}
+ego@result %>% DT::datatable()
+```
+
 ### "CNET" Plot
 Relationships between related GO terms with shared genes
 ```{r, fig.width=6, fig.height=4}
@@ -269,6 +274,11 @@ Shows the "sets" of GO terms to increase understanding of what the diff gene set
 ego_pair <- pairwise_termsim(ego) 
 go_term_relationships <- emapplot(ego_pair,layout="kk") #+ ggtitle("Enriched GO Term Relationships")
 go_term_relationships
+```
+
+### Heatmap of top 3 terms
+```{r, fig.height=5, fig.width=3}
+
 ```
 ## Wikipathways
 ```{r}
