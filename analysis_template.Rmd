@@ -276,10 +276,6 @@ go_term_relationships <- emapplot(ego_pair,layout="kk") #+ ggtitle("Enriched GO 
 go_term_relationships
 ```
 
-### Heatmap of top 3 terms
-```{r, fig.height=5, fig.width=3}
-
-```
 ## Wikipathways
 ```{r}
 # system("wget https://wikipathways-data.wmcloud.org/current/gmt/wikipathways-20230210-gmt-Homo_sapiens.gmt")
@@ -332,14 +328,34 @@ gse@result %>% as_tibble() %>% arrange(p.adjust) %>% filter(p.adjust < 0.01) %>%
 
 ### Heatmaps
 
-#### Extracellular Matrix (GO:0031012)
-```{r}
-relative <- log2(gene_TPM + 1) # add a pseudocount of 1 as log2(0) is infinity
+#### G protein-coupled receptor activity GO:0004930
+```{r, fig.width=10, fig.height=8}
+relative <- log2(counts(dds, normalize = TRUE) + 1) # add a pseudocount of 1 as log2(0) is infinity
+colnames(relative) <- meta$Library
 row_means <- rowMeans(relative)
 relative <- relative - row_means
 #relative_g <-  relative
 
-gene_set<- (gse@result %>% filter(ID == 'GO:0031012') %>% pull(core_enrichment) %>% str_split(., '\\/'))[[1]]
+gene_set<- (gse@result %>% filter(ID == 'GO:0004930') %>% pull(core_enrichment) %>% str_split(., '\\/'))[[1]]
+
+
+library(ComplexHeatmap)
+hm_matrix <- relative[gene_set, meta %>% arrange(Condition, Library) %>% pull(Library)]
+
+ha_column = HeatmapAnnotation(df = data.frame(Condition = meta %>% arrange(Condition, Library) %>% pull(Condition)),
+                              col = list(Condition = c("GFP+" = viridis::magma(20)[5], 
+                                                       "ctrl center" = viridis::magma(20)[8],
+                                                       "ctrl periphery" = viridis::magma(20)[14])))
+
+Heatmap(hm_matrix, 
+        cluster_columns = FALSE,
+        cluster_rows = TRUE, 
+        name = 'log2(Fold\nChange)', 
+        top_annotation = ha_column, 
+        col = circlize::colorRamp2(
+          seq(-8, 8, length.out = 11), 
+          RColorBrewer::brewer.pal(11, "RdBu")
+        ))
 ```
 
 ## KEGG Pathway Enrichment
@@ -355,21 +371,6 @@ dotplot(kk) + ggtitle("KEGG Pathway Enrichment")
 ```{r}
 kk <- setReadable(kk, OrgDb = org.Hs.eg.db, keyType = 'ENTREZID')
 kk@result %>% as_tibble() %>% arrange(p.adjust) %>% filter(p.adjust < 0.01) %>% DT::datatable()
-```
-
-### Focal Adhesion (hsa04510)
-```{r}
-gene_set<- (kk@result %>% filter(ID == 'hsa04510') %>% pull(geneID) %>% str_split(., '\\/'))[[1]]
-```
-
-```{r, fig.width=3, fig.height=3}
-hm_matrix <- relative[gene_set,]
-
-Heatmap(hm_matrix, 
-        cluster_columns = FALSE,
-        cluster_rows = TRUE, 
-        name = 'log2(Fold\nChange)', 
-        top_annotation = ha_column)
 ```
 
 
