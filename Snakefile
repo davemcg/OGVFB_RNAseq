@@ -50,7 +50,7 @@ FASTQC_OUTPUT = ['fastqc/' + sample \
 #wildcard_constraints:
 #	flowcell_lane_info = "^H\w.*_L\d{3}_"
 
-localrules: all, download_references, multiqc
+localrules: all, multiqc
 
 
 rule all:
