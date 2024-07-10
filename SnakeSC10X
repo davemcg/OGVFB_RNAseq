@@ -6,6 +6,7 @@ rule all:
 					hvg = config['hvg'], \
 					subsets = config['subsets']),
 		expand('seacells/{tag}.obs.csv.gz',  tag = config['samples']),
+		'aggr/solo.csv.gz',
 		expand('fastqc/{tag}/possorted_genome_bam_fastqc.html', tag = config['samples'])
 # cellranger mkref --genome=GRCh38_GFP_RFP --fasta=reference_cellranger-GRCh38-1.2.0_plus_GFP/genome_GFP_RFP.fa --genes reference_cellranger-GRCh38-1.2.0_plus_GFP/genes_GFP_RFP.gtf --nthreads=10
 
@@ -50,6 +51,18 @@ rule seacells:
 		/data/mcgaugheyd/conda/envs/seacells/bin/python /home/mcgaugheyd/git/OGVFB_RNAseq/src/seacell_maker.py {params.h5} {wildcards.tag} {output}
 		"""
 
+rule solo:
+	input:
+		'{tag}/outs/cloupe.cloupe'
+	params:
+		h5 = '{tag}/outs/filtered_feature_bc_matrix.h5'
+	output:
+		'{tag}/outs/solo.csv.gz'
+	shell:
+		"""
+		module load scvitools/1.0.4.gpu; python-scvitools /home/mcgaugheyd/git/OGVFB_RNAseq/src/solo.py {params.h5} {output}	
+		"""
+
 rule fastqc:
 	input:
 		'{tag}/outs/cloupe.cloupe'
@@ -82,16 +95,31 @@ rule aggr:
 		cellranger aggr --id={params.folder} --csv={input.csv} --localcores {threads} --localmem 30
 		"""
 
+rule aggr_solo:
+	input:
+		solo_files = expand('{tag}/outs/solo.csv.gz',  tag = config['samples']),
+		sample_info = config['sample_info']
+	output:
+		'aggr/solo.csv.gz'
+	shell:
+		"""
+		module load R/4.2
+		Rscript {git_dir}/src/solo_aggr.R {input.sample_info} {output}
+		"""
+
 rule quick_process:
 	input:
-		'aggr/outs/count/cloupe.cloupe'
+		sample_info = config['sample_info'],
+		cloupe = 'aggr/outs/count/cloupe.cloupe',
+		solo = 'aggr/solo.csv.gz'
 	output:
 		'data/bioc_dims{dims}_hvg{hvg}_subset{subsets}.obj.Rdata'
 	threads: 4
 	shell:
 		"""
-		module load R/4.1
+		module load R/4.2
 		Rscript {git_dir}/src/scRNA_quick_start.R \
+			{input.sample_info} \
 			{wildcards.hvg} \
 			{wildcards.dims} \
 			{output} \

@@ -1,0 +1,5 @@
+library_id,molecule_h5
+E11_scRNA_01,/data/mcgaugheyd/projects/nei/brooks/sc_mouse_OFC_e11/HT5N3DRXY_19248667/outs/molecule_info.h5
+E11_scRNA_02,/data/mcgaugheyd/projects/nei/brooks/sc_mouse_OFC_e11/HT5N3DRXY_19248676/outs/molecule_info.h5
+E11_scRNA_03,/data/mcgaugheyd/projects/nei/brooks/sc_mouse_OFC_e11/HT5N3DRXY_19248670/outs/molecule_info.h5
+E11_scRNA_04,/data/mcgaugheyd/projects/nei/brooks/sc_mouse_OFC_e11/HT5N3DRXY_19248673/outs/molecule_info.h5
