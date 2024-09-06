@@ -1,10 +1,23 @@
-gencode_version: '35'
-tx: 'gencode.v35.pc_transcripts.fa.gz'
+# warning!!
+# remove all comment lines
+
+# human
+txome: 'gencode.v35.pc_transcripts.fa.gz'
 genome: 'GRCh38.p13.genome.fa.gz'
 ftp: 'rsync://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_'
 annotation_path: '/data/mcgaugheyd/genomes/GRCh38/'
+
+# mouse
+txome: 'gencode.vM25.pc_transcripts.fa.gz'
+genome: 'GRCm38.p6.genome.fa.gz'
+ftp: 'rsync://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_mouse/release_'
+annotation_path: '/data/mcgaugheyd/genomes/GRCm38/'
+
+# not org dependent
 sample_fastq_table: 'sample_table.tsv'
 forward_suffix: '_R1_001'
 reverse_suffix: '_R2_001'
 fastq_relative_dir: 'fastq'
 star: 'True'
+counts: 'True'
+make_counts_script: '~/git/OGVFB_RNAseq/src/make_bulk_counts.R'

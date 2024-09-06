@@ -3,7 +3,7 @@
 	{
 		"partition" : "quick",
 		"time" : "02:00:00",
-		"mem" : "8g",
+		"mem" : "12g",
 		"extra" : "",
 		"output"  : "00log/{rule}_{wildcards}.out",
 		"error" : "00log/{rule}_{wildcards}.err" 
@@ -11,7 +11,7 @@
 	"salmon_index" : 
 	{
 		"partition" : "norm",
-		"mem" : "32G",
+		"mem" : "64G",
 		"time" : "06:00:00"
 	},
 	"salmon_quant" :
@@ -31,6 +31,6 @@
 		"time" : "24:00:00",
 		"mem" : "48g",
 		"partition" : "norm",
-		"extra" : " --gres=lscratch:80"
+		"extra" : " --gres=lscratch:140"
 	}
 }
