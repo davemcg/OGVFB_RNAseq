@@ -52,31 +52,20 @@ FASTQC_OUTPUT = ['fastqc/' + sample \
 
 localrules: all, multiqc
 
-
-rule all:
-	input:
-		STAR_BAM_OUTPUT,
-		SALMON_QUANT_OUTPUT,
-		'fastqc/multiqc_report',
-		'salmon_quant/multiqc_report'
-
-
-rule download_references:
-	output:
-		#basic_gtf = config['annotation_path'] + 'gencode.v' + config['gencode_version'] + '.basic.annotation.gtf.gz',
-		#full_gtf = config['annotation_path'] + 'gencode.v' + config['gencode_version'] + '.annotation.gtf.gz',
-		#full_tx = config['annotation_path'] + 'gencode.v' + config['gencode_version'] + '.transcripts.fa.gz',
-		pc_tx = config['annotation_path'] + 'gencode.v' + config['gencode_version'] + '.pc_transcripts.fa.gz',
-		genome_fa = config['annotation_path'] + config['genome']
-	params: 
-		fasta_pc_transcripts = 'gencode.v' + config['gencode_version'] + '.pc_transcripts.fa.gz',
-		genome_fa = config['genome'],
-		ftp = config['ftp'] + config['gencode_version'] + '/'
-	shell:
-		"""
-		rsync -av {params.ftp}{params.fasta_pc_transcripts} {config[annotation_path]}
-		rsync -av {params.ftp}{params.genome_fa} {config[annotation_path]}
-		"""
+if config['counts'] == 'True':
+	rule all:
+		input:
+			STAR_BAM_OUTPUT,
+			'counts/gene_counts.csv.gz',
+			'fastqc/multiqc_report',
+			'salmon_quant/multiqc_report'
+else:
+	rule all:
+		input:
+			STAR_BAM_OUTPUT,
+			SALMON_QUANT_OUTPUT,
+			'fastqc/multiqc_report',
+			'salmon_quant/multiqc_report'
 
 rule trim_fastq:
 	input:
@@ -108,10 +97,10 @@ rule fastqc:
 
 rule salmon_index:
 	input:
-		tx = config['annotation_path'] + config['tx'],
+		tx = config['annotation_path'] + config['txome'],
 		genome = config['annotation_path'] + config['genome']
 	output:
-		directory(config['annotation_path'] + 'salmon_index_gencode.' + config['gencode_version'] + '.pc_transcripts_salmon130')
+		directory(config['annotation_path'] + 'salmon_index_gencode.' + config['txome'])
 	threads: 16
 	conda: 'OGVFB_RNAseq.yml'
 	shell:
@@ -139,7 +128,7 @@ rule STAR_index:
 			--runMode genomeGenerate \
 			--genomeDir {output} \
 			--genomeFastaFiles tmp_fasta \
-			--limitGenomeGenerateRAM=140090479317
+			--limitGenomeGenerateRAM=140090479317 
 		rm tmp_fasta 
 		"""
 
@@ -147,7 +136,7 @@ rule salmon_quant:
 	input:
 		r1 = lambda wildcards: fastq_by_sample(wildcards.sample, 'Forward'),
 		r2 = lambda wildcards: fastq_by_sample(wildcards.sample, 'Reverse'),
-		index = config['annotation_path'] + 'salmon_index_gencode.' + config['gencode_version'] + '.pc_transcripts_salmon130'
+		index = config['annotation_path'] + 'salmon_index_gencode.' + config['txome']
 	output:
 		'salmon_quant/{sample}/quant.sf'
 	params:
@@ -188,7 +177,8 @@ rule STAR_align:
 			--readFilesCommand zcat \
 			--outFileNamePrefix {params.out} \
 			--outTmpDir {params.scratch} \
-			--limitBAMsortRAM 32000000000 
+			--limitBAMsortRAM 32000000000 \
+			--limitOutSJcollapsed 2000000
 		mkdir -p {params.scratch}SAMSORT
 		samtools sort -T {params.scratch}SAMSORT -o {output} {params.out}Aligned.out.bam 
 		rm {params.out}Aligned.out.bam
@@ -210,4 +200,17 @@ rule multiqc:
 		multiqc -f -o {output.fastqc} fastqc/
 		multiqc -f -o {output.salmon} salmon_quant/
 		multiqc -f -o {output.star} STAR_align/
+		"""
+
+rule make_counts:
+	input:
+		SALMON_QUANT_OUTPUT
+	output:
+		'counts/gene_counts.csv.gz'
+	conda: 'OGVFB_RNAseq.yml'
+	params:
+		rscript = config['make_counts_script']
+	shell:
+		"""
+		Rscript {params.rscript} {input}
 		"""
