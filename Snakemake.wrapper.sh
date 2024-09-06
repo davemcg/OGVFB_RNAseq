@@ -18,6 +18,7 @@ sbcmd="sbatch --cpus-per-task={threads} \
 
 
 snakemake -s /home/mcgaugheyd/git/OGVFB_RNAseq/Snakefile \
+  --rerun-triggers mtime \
   -pr --local-cores 2 --jobs 500 \
   --cluster-config /home/mcgaugheyd/git/OGVFB_RNAseq/cluster.json \
   --cluster "$sbcmd"  --latency-wait 120 --rerun-incomplete \
