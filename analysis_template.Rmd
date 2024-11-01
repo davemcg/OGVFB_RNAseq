@@ -124,6 +124,49 @@ dataGG %>%
   cowplot::theme_cowplot() 
 ```
 
+## metamoRph
+with [metamoRph v0.22](http://github.com/davemcg/metamoRph)
+
+### Sex Guess
+```{r}
+load('~/data/metamoRph_models/sex.Rdata')
+library(org.Hs.eg.db)
+conv_table <- select(org.Hs.eg.db, keys = row.names(assay(dds,'counts')), columns = c("ENSEMBL", "GENENAME", "MAP",
+    "GENETYPE"), keytype = "SYMBOL")
+
+gcounts <- assay(dds,'counts')
+row.names(gcounts) <- row.names(gcounts) %>% enframe() %>% left_join(conv_table %>% dplyr::select(SYMBOL,ENSEMBL) %>% filter(!duplicated(ENSEMBL), !duplicated(SYMBOL)), by = c("value" = "SYMBOL")) %>% pull(ENSEMBL)
+
+# remove NA gene rows (where gene symbol <-> ensembl join didn't work because of multi-matches)
+projected_data_outside <- metamoRph::metamoRph(gcounts[!is.na(row.names(gcounts)),], gtex_sex$PCA$rotation, gtex_sex$center_scale)
+label_guesses_outside <- metamoRph::model_apply(sex_model, projected_data_outside)
+
+dataGG$Sex <- label_guesses_outside$predict
+dataGG$Sex_Score <- label_guesses_outside$max_score
+ggplot(dataGG, aes(PC1, PC2, color=Sex)) +
+  geom_point(size=3) +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
+  cowplot::theme_cowplot()
+
+dataGG %>% dplyr::select(-contains("PC")) %>% DT::datatable()
+```
+
+### Tissue Guess
+
+```{r}
+load('~/data/metamoRph_models/eiad_ocular_tissue.02.Rdata')
+
+projected_data_outside <- metamoRph::metamoRph(gcounts[!is.na(row.names(gcounts)),], eiad_pca$PCA$rotation, eiad_pca$center_scale)
+label_guesses_outside <- metamoRph::model_apply(tissue_model, projected_data_outside)
+
+meta$Tissue_Predict <- label_guesses_outside$predict
+meta$Tissue_Score <- label_guesses_outside$max_score
+
+meta %>% DT::datatable()
+```
+
+
 # Heatmap
 Run clustering on sample <-> sample distances
 
@@ -203,18 +246,19 @@ volcano_maker(df = resLFC %>% as_tibble(rownames = 'Gene')) + coord_cartesian(xl
 
 ## Dot Plots of Select Genes
 ```{r, fig.width=5, fig.height=3}
-gene_TPM <- txi$abundance
-colnames(gene_TPM) <- meta$value
-plot_genes <- bind_rows(subset(resLFC %>% as_tibble(rownames = 'Gene'), padj<0.01 & baseMean > 500 & log2FoldChange > 1) %>% arrange((padj)) %>% head(10), 
-                        subset(resLFC %>% as_tibble(rownames = 'Gene'), padj<0.01 & baseMean > 500 & log2FoldChange < -1) %>% arrange((padj)) %>% head(10)) %>% pull(Gene)
-gene_TPM %>% as_tibble(rownames = 'Gene') %>% 
+gene_ncounts <- counts(dds, normalize = TRUE)
+colnames(gene_ncounts) <- meta$value
+plot_genes <- bind_rows(subset(resLFC %>% as_tibble(rownames = 'Gene'), padj<0.01 & baseMean > 50 & log2FoldChange > 1) %>% arrange((padj)) %>% head(10), 
+                        subset(resLFC %>% as_tibble(rownames = 'Gene'), padj<0.01 & baseMean > 50 & log2FoldChange < -1) %>% arrange((padj)) %>% head(10)) %>% pull(Gene)
+gene_ncount %>% as_tibble(rownames = 'Gene') %>% 
   pivot_longer(-Gene) %>% 
-  left_join(meta, by = c('name' = 'value')) %>% 
+  left_join(meta, by = c('name' = 'Sample')) %>% 
   filter(Gene %in% plot_genes) %>% 
-  ggplot(aes(x=Condition, y = log2(value), color = name)) + 
+  ggplot(aes(x=Time, y = log2(value), color = Genotype)) + 
   geom_boxplot(color = 'black') +
   geom_point() + 
-  facet_wrap(~Gene) +
+  ylab("log2(norm count)") +
+  facet_wrap(~Gene, scales = 'free_x') +
   cowplot::theme_cowplot() +
   coord_flip()
 ```
@@ -372,6 +416,45 @@ dotplot(kk) + ggtitle("KEGG Pathway Enrichment")
 kk <- setReadable(kk, OrgDb = org.Hs.eg.db, keyType = 'ENTREZID')
 kk@result %>% as_tibble() %>% arrange(p.adjust) %>% filter(p.adjust < 0.01) %>% DT::datatable()
 ```
+
+# Outputs
+
+The "analysis_00_diff_table.freeze01.csv" file is the diff table from this document with the adjusted logFC
+
+The "analysis_00_diff_table_raw.freeze01.csv" file is the diff table from this document with the raw (unadjusted) logFC
+
+The "analysis_00.rse.geyser.Rdata" is a [geyser](http://github.com/davemcg/geyser) compatible object for interactive expression analysis.
+
+You can use the rse file as follows in R:
+```
+install.packages('remotes')
+remotes::install_github('davemcg/geyser')
+load('~/path_to/analysis_00.rse.geyser.Rdata')
+library(geyser)
+geyser(rse)
+```
+
+
+```{r}
+system("mkdir -p ../data")
+write_csv(resLFC %>% as_tibble(rownames = 'Gene') %>% arrange(-abs(log2FoldChange)), file = '../data/analysis_00_diff_table.freeze01.csv')
+write_csv(res %>% as_tibble(rownames = 'Gene') %>% arrange(-abs(log2FoldChange)), file = '../data/analysis_00_diff_table_raw.freeze01.csv')
+
+library(SummarizedExperiment)
+counts <- assay(dds, 'counts') 
+colnames(counts) <- meta$Library
+norm_counts <- counts(dds, normalize = TRUE) 
+colnames(norm_counts) <- meta$Library
+tpm <- txi$abundance
+colnames(tpm) <- meta$Library
+rse <- SummarizedExperiment(assays = list(counts = counts,
+                                          deseq_counts = norm_counts,
+                                          tpm = tpm), colData = meta)
+colnames(rse) <- meta$Library
+save(rse, file = '../data/analysis_00.rse.geyser.Rdata')
+```
+
+
 
 
 # Session Info
