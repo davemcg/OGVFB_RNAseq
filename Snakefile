@@ -158,7 +158,7 @@ rule salmon_quant:
 
 rule STAR_align:
 	input:
-		index = config['annotation_path'] + config['genome'] + '_STAR275',
+		config['annotation_path'] + config['genome'] + '_' + config['gtf'] + '_STAR275',
 		r1 = lambda wildcards: fastq_by_sample(wildcards.sample, 'Forward'),
 		r2 = lambda wildcards: fastq_by_sample(wildcards.sample, 'Reverse')
 	output:
