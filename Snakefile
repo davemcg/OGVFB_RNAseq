@@ -115,18 +115,21 @@ rule salmon_index:
 
 rule STAR_index:
 	input:
-		config['annotation_path'] + config['genome']	
+		fasta = config['annotation_path'] + config['genome'],
+		gtf = config['annotation_path'] + config['gtf']
 	output:
-		directory(config['annotation_path'] + config['genome'] + '_STAR275')
+		directory(config['annotation_path'] + config['genome'] + '_' + config['gtf'] + '_STAR275')
 	threads: 16
 	conda: 'OGVFB_RNAseq.yml'
 	shell:
 		"""
 		mkdir -p {output}
-		zcat {input} > tmp_fasta
+		zcat {input.fasta} > tmp_fasta
 		STAR --runThreadN {threads} \
 			--runMode genomeGenerate \
 			--genomeDir {output} \
+			--sjdbGTFfile {input.gtf} \ 
+			--sjdbOverhang 100 \
 			--genomeFastaFiles tmp_fasta \
 			--limitGenomeGenerateRAM=140090479317 
 		rm tmp_fasta 
