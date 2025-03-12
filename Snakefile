@@ -125,14 +125,16 @@ rule STAR_index:
 		"""
 		mkdir -p {output}
 		zcat {input.fasta} > tmp_fasta
+		zcat {input.gtf} > tmp_gtf
 		STAR --runThreadN {threads} \
 			--runMode genomeGenerate \
 			--genomeDir {output} \
-			--sjdbGTFfile {input.gtf} \ 
+			--sjdbGTFfile tmp_gtf \
 			--sjdbOverhang 100 \
 			--genomeFastaFiles tmp_fasta \
 			--limitGenomeGenerateRAM=140090479317 
 		rm tmp_fasta 
+		rm tmp_gtf
 		"""
 
 rule salmon_quant:
@@ -158,7 +160,7 @@ rule salmon_quant:
 
 rule STAR_align:
 	input:
-		config['annotation_path'] + config['genome'] + '_' + config['gtf'] + '_STAR275',
+		index = config['annotation_path'] + config['genome'] + '_' + config['gtf'] + '_STAR275',
 		r1 = lambda wildcards: fastq_by_sample(wildcards.sample, 'Forward'),
 		r2 = lambda wildcards: fastq_by_sample(wildcards.sample, 'Reverse')
 	output:
