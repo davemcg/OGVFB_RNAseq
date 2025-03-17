@@ -36,7 +36,7 @@ def pe_fastq_by_lane(lane_sample, read):
 
 
 # STAR bam
-STAR_BAM_OUTPUT = ['STAR_align/' + sample + '/' + 'Aligned.sortedByCoord.out.bam'  \
+STAR_BAM_OUTPUT = ['STAR_align/' + sample + '/' + sample + '_aligned.sortedByCoord.out.bam'  \
 	for sample in SAMPLE_DICT.keys()] 
 
 # salmon quantification
@@ -164,7 +164,7 @@ rule STAR_align:
 		r1 = lambda wildcards: fastq_by_sample(wildcards.sample, 'Forward'),
 		r2 = lambda wildcards: fastq_by_sample(wildcards.sample, 'Reverse')
 	output:
-		'STAR_align/{sample}/Aligned.sortedByCoord.out.bam'
+		'STAR_align/{sample}/{sample}_aligned.sortedByCoord.out.bam'
 	conda: 'OGVFB_RNAseq.yml'
 	params:
 		scratch = '/lscratch/$SLURM_JOB_ID/STAR_align__{sample}/',
