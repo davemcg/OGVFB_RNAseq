@@ -10,12 +10,34 @@ ssheet <- read_csv(args[1])
 hvg_num <- args[2] %>% as.integer()
 pca_num <- args[3] %>% as.integer()
 out_name <- args[4]
-subsets <- args[5]
+cellbender_input <- args[5]
+subsets <- args[6]
 
-sce_full <- read10xCounts('aggr/outs/count/filtered_feature_bc_matrix.h5')
+
+if (toupper(cellbender_input) == 'TRUE'){
+  ssheet$molecule_h5 <- sub("molecule_info.h5", "cellbender_filtered.h5", ssheet$molecule_h5)
+  ssheet$sample_number <- seq(1,nrow(ssheet))
+  cellbender_files <- gsub("molecule_info.h5", "cellbender_filtered.h5", ssheet$molecule_h5)
+  sce_list <- list()
+  counter = 1
+  for (i in cellbender_files){
+    sce_list[[i]] <- read10xCounts(i)
+    colData(sce_list[[i]])$sample_number <- counter
+    counter <- counter + 1
+  }
+  sce_full <- Reduce(cbind, sce_list)
+} else {
+  sce_full <- read10xCounts('aggr/outs/count/filtered_feature_bc_matrix.h5')
+  ssheet$molecule_h5 <- sub("molecule_info.h5", "filtered_feature_bc_matrix.h5", ssheet$molecule_h5)
+  # Feature selection.
+  ## 10X cellranger appends a digit to the barcode to denote a different sample
+  colData(sce_full)$sample_number <- colData(sce_full)$Barcode  %>% str_extract('\\d+') %>% as.factor()
+}
+
 features <- read_tsv('aggr/outs/count/filtered_feature_bc_matrix/features.tsv.gz', col_names = FALSE)
-features$X2 <- toupper(features$X2)
-mito_ens <- features %>% filter(grepl("^MT",X2)) %>% pull(X1)
+#features$X2 <- toupper(features$X2)
+
+mito_ens <- features %>% mutate(X2 = toupper(X2)) %>% filter(grepl("^MT",X2)) %>% pull(X1)
 is.mito <- row.names(sce_full) %in% mito_ens
 
 solo_scores <- read_csv('aggr/solo.csv.gz')
@@ -25,10 +47,12 @@ colData(sce_full)$sample_number <- colData(sce_full)$Barcode  %>% str_extract('\
 
 # loop through each individual sample to identify outliers with the scuttle toolset
 filter_list <- list()
-for (i in ssheet$sample_id){
-  sce_sub <-  read10xCounts(paste0(i,'/outs/filtered_feature_bc_matrix.h5'))
+for (i in seq(1,nrow(ssheet))){
+  id = ssheet[i,] %>% pull(1)
+  h5 <- ssheet[i,] %>% pull(2)
+  sce_sub <-  read10xCounts(h5)
   qcstats_sub <- perCellQCMetrics(sce_sub, subsets=list(Mito=is.mito))
-  filter_list[[i]] <- quickPerCellQC(qcstats_sub, percent_subsets="subsets_Mito_percent") %>% data.frame()
+  filter_list[[id]] <- quickPerCellQC(qcstats_sub, percent_subsets="subsets_Mito_percent") %>% data.frame()
 }
 filtered <- data.table::rbindlist(filter_list)
 
@@ -36,16 +60,26 @@ qcstats <- perCellQCMetrics(sce_full, subsets=list(Mito=is.mito))
 sce_full <- addPerCellQCMetrics(sce_full, subsets=list(Mito=is.mito))
 sce <- sce_full[, !filtered$discard]
 
+
+
+
 run_workflow <- function(sce){
   # Normalization.
   if (!is.na(subsets)){
-    if (grepl("downsample", subsets)){
+    if (grepl("downsample",subsets)){
       sce <- logNormCounts(sce, downsample = TRUE)
     } else {
       sce <- logNormCounts(sce)
     }
   } else {
     sce <- logNormCounts(sce)
+  }
+
+
+  if (!is.na(out_name)){
+    # user gives the barcode suffix(es) to filter down to
+    custom_cutdown <- str_split(subsets, '-')[[1]] %>% as.integer()
+    sce <- sce[,(colData(sce)$sample_number %in% custom_cutdown)]
   }
 
   # Feature selection.
