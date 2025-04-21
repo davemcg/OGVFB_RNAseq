@@ -83,8 +83,6 @@ run_workflow <- function(sce){
   }
 
   # Feature selection.
-  ## 10X cellranger appends a digit to the barcode to denote a different sample
-  colData(sce)$sample_number <- colData(sce)$Barcode  %>% str_extract('\\d+') %>% as.factor()
   if (!is.na(out_name)){
     # user gives the barcode suffix(es) to filter down to
     custom_cutdown <- str_split(subsets, ',')[[1]] %>% as.integer()
