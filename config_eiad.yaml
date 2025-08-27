@@ -1,0 +1,23 @@
+# human specific
+txome: 'gencode.v47.transcripts.fa.gz'
+genome: 'GRCh38.primary_assembly.genome.fa.gz'
+ftp: 'rsync://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_'
+gtf: 'gencode.v47.primary_assembly.annotation.gtf.gz'
+gencode_version: '47'
+annotation_path: '/data/mcgaugheyd/genomes/GRCh38/'
+# mouse specific
+txome: 'gencode.vM36.transcripts.fa.gz'
+genome: 'GRCm39.genome.fa.gz'
+ftp: 'rsync://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_mouse/release_'
+gtf: 'gencode.vM36.annotation.gtf.gz'
+gencode_version: 'M36'
+annotation_path: '/data/mcgaugheyd/genomes/GRCm39/'
+# shared
+sample_fastq_table: 'sample_table.tsv'
+fq1_suffix: '_R1_001.fastq.gz'
+fq2_suffix: '_R2_001.fastq.gz'
+fqS_suffix: '.fastq.gz'
+fastq_dir: '/data/mcgaugheyd/projects/nei/PI/SOMETHING/fastq'
+star: 'True'
+counts: 'False'
+make_counts_script: '~/git/OGVFB_RNAseq/src/make_bulk_counts.R'
