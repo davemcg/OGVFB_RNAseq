@@ -14,6 +14,7 @@ for line in SAMPLE_FASTQ_TABLE:
 	elif config['reverse_suffix'] in fastq and sample in SAMPLE_DICT:
 		SAMPLE_DICT[sample]['Reverse'].append(fastq)
 	else:
+		print(SAMPLE_DICT)
 		print("parsing error?")
 
 
