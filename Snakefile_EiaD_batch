@@ -39,10 +39,10 @@ for line in open(sample_run_setup):
 batch_size = 50
 sample_batches = {}
 for i, sample in enumerate(sample_files):
-    batch_num = i // batch_size
-    if batch_num not in sample_batches:
-        sample_batches[batch_num] = []
-    sample_batches[batch_num].append(sample)
+	batch_num = i // batch_size
+	if batch_num not in sample_batches:
+		sample_batches[batch_num] = []
+	sample_batches[batch_num].append(sample)
 # MODIFICATION END
 
 
@@ -80,13 +80,13 @@ SALMON_QUANT_OUTPUT = ['salmon_quant/' + sample + '/quant.sf'  \
 
 # STAR bam
 STAR_QUANT_OUTPUT = ['STAR_align/' + sample + '/' + sample + '_aligned.sortedByCoord.out.bam'  \
-    for sample in sample_files]
+	for sample in sample_files]
 
 # fastqc of each sample pairSAMPLE_DICT
-FASTQC_OUTPUT = ['fastqc/' + sample \
-    for sample in sample_files]
+FASTQC_OUTPUT = ['fastqc/' + sample + '.done' \
+	for sample in sample_files]
 
-localrules: all, print_quants,  multiqc
+localrules: all, print_quants  
 #print(sample_run_dict)
 
 if config['star']:
@@ -94,11 +94,13 @@ if config['star']:
 		input:
 			'counts/gene_counts.csv.gz',
 			'salmon_quant_output.tsv',
+			'multiqc/multiqc_report.html',
 			'STAR_output.tsv'
 else:
 	rule all:
 		input:
 			'counts/gene_counts.csv.gz',
+			'multiqc/multiqc_report.html',
 			'salmon_quant_output.tsv',
 
 
@@ -106,21 +108,26 @@ else:
 # Snakemake will ensure the inputs for one batch are created before moving to the next,
 # managing resource usage. The output is a simple flag file to signal completion.
 def get_batch_salmon_files(wildcards):
-    samples = sample_batches[int(wildcards.batch)]
-    return expand('salmon_quant/{sample}/quant.sf', sample=samples)
+	samples = sample_batches[int(wildcards.batch)]
+	return expand('salmon_quant/{sample}/quant.sf', sample=samples)
 
 def get_batch_star_files(wildcards):
-    if config['star']:
-        samples = sample_batches[int(wildcards.batch)]
-        return expand('STAR_align/{sample}/{sample}_aligned.sortedByCoord.out.bam', sample=samples)
-    return []
+	if config['star']:
+		samples = sample_batches[int(wildcards.batch)]
+		return expand('STAR_align/{sample}/{sample}_aligned.sortedByCoord.out.bam', sample=samples)
+	return []
+
+def get_batch_fastqc_files(wildcards):
+	samples = sample_batches[int(wildcards.batch)]
+	return expand('fastqc/{sample}.done', sample=samples)
 
 checkpoint process_batch:
-    input:
-        salmon=get_batch_salmon_files,
-        star=get_batch_star_files
-    output:
-        touch("batch_complete/{batch}.done")
+	input:
+		fastqc=get_batch_fastqc_files,
+		salmon=get_batch_salmon_files,
+		star=get_batch_star_files
+	output:
+		touch("batch_complete/{batch}.done")
 # MODIFICATION END
 
 
@@ -271,8 +278,6 @@ rule STAR_align:
 		"""
 
 
-# MODIFICATION: This rule now depends on the batch completion flags.
-# It will only run after all batches are successfully processed.
 rule print_SALMON_quants:
 	input:
 		quants=SALMON_QUANT_OUTPUT,
@@ -283,7 +288,6 @@ rule print_SALMON_quants:
 		with open(output[0], 'w') as f:
 			f.write('\n'.join(str(quant) for quant in input.quants))
 
-# MODIFICATION: This rule also depends on the batch completion flags.
 rule print_STAR_quants:
 	input:
 		quants=STAR_QUANT_OUTPUT,
@@ -294,8 +298,6 @@ rule print_STAR_quants:
 		with open(output[0], 'w') as f:
 			f.write('\n'.join(str(quant) for quant in input.quants))
 
-# MODIFICATION: The final count matrix generation now depends on all batches finishing.
-# The shell command is updated to use 'input.quants'.
 rule make_counts:
 	input:
 		quants=SALMON_QUANT_OUTPUT,
@@ -308,4 +310,36 @@ rule make_counts:
 	shell:
 		"""
 		Rscript {params} {input.quants}
+		"""
+
+
+# fastqc / multiqc stats
+rule fastqc:
+	input:
+		lambda wildcards: return_fq(wildcards.sample)
+	output:
+		touch('fastqc/{sample}.done')
+	params:
+		outdir = 'fastqc/'
+	threads: 2 
+	conda: 'OGVFB_RNAseq.yml' 
+	shell:
+		"""
+		mkdir -p {params.outdir}
+		fastqc -t {threads} -o {params.outdir} {input}
+		"""
+
+rule multiqc:
+	input:
+		wait_for_batches=expand("batch_complete/{batch}.done", batch=sample_batches.keys())
+	output:
+		"multiqc/multiqc_report.html"
+	params:
+		# Directories to scan: fastqc, STAR alignment logs, and Salmon logs
+		search_dirs = "fastqc/ STAR_align/ salmon_quant/",
+		outdir = "multiqc/"
+	conda: 'OGVFB_RNAseq.yml' 
+	shell:
+		"""
+		multiqc {params.search_dirs} -o {params.outdir} -n multiqc_report.html
 		"""
