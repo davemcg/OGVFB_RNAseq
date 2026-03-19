@@ -1,14 +1,34 @@
 ---
-title: "Analysis \"Template\""
-output: 
-  html_notebook:
-    author: "David McGaughey"
-    date: "`r Sys.Date()`"
-    theme: flatly
-    toc: true
-    toc_float: true
-    code_folding: hide
+title: "Analysis Template"
+author: "David McGaughey"
+date: "`r Sys.Date()`"
+output:
+ html_notebook:
+  theme: flatly
+  toc: true
+  toc_float: true
+  code_folding: hide
+ html_document:
+  theme: flatly
+  toc: true
+  toc_float: true
+  code_folding: hide
 ---
+
+/Users/mcgaugheyd/git/OGVFB_RNAseq
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  message = FALSE,  warning = FALSE,
+  collapse = TRUE,
+  fig.width = 12, fig.height = 8,
+  comment = "#>",
+        dpi=300
+    )
+```
+
+
+
 ```{r, message=FALSE, message=FALSE, warning=FALSE}
 library(data.table)
 library(tidyverse)
@@ -19,10 +39,14 @@ library(stringr)
 library(ggrepel)
 library(apeglm)
 library(clusterProfiler)
+library(matrixStats)
+library(mcHelpeRs) # devtools::install_github("davemcg/mcHelpeRs")
+#library(ReactomePA)
+library(PCAtools)
 # Parallel
 library(BiocParallel)
-register(MulticoreParam(6))
-working_dir <- '~/data/project/salmon_quant/'
+register(MulticoreParam(12))
+working_dir <- '~/data/bharti/PROJECT/salmon_quant/'
 files <- list.files(path=working_dir,recursive=TRUE,pattern='quant.sf', full.names = TRUE)
 ```
 
@@ -34,125 +58,46 @@ anno_tximport <- anno %>%
   dplyr::select(target_id = Name, Gene)
 ```
 
-# Import quant at gene level
-```{r, message=FALSE, message=FALSE, warning=FALSE}
-txi <- tximport(files, type = "salmon", tx2gene = anno_tximport)
-tpm <- txi$abundance
-```
-
 # Metadata
 ```{r}
-meta <- gsub(pattern = '\\/Users\\/mcgaugheyd\\/data\\/project\\/salmon_quant\\/\\/','',files) %>% gsub('\\/quant.sf','',.) %>% enframe()
-meta$fastq_path <- files
-meta <- meta %>% separate(value, into = c('line','treatment','biological_replicate'), sep = '_', remove = FALSE)
+meta <- gsub(pattern = '\\/Users\\/mcgaugheyd\\/data\\/bharti\\/PROJECT\\/salmon_quant\\/\\/','',files) %>% gsub('\\/quant.sf','',.) %>% enframe()
+meta$salmon_path <- files
+
+scientist_meta <- readxl::read_xlsx("RNAseq Sample description 2026.xlsx")
+meta$treatment <- str_extract(string = meta$value, pattern = "C[CI]HS")
+meta <- meta %>% dplyr::rename(sample = value) %>% 
+  left_join(connie_meta,  by = c("sample" = "Sample name"))
 ```
 
-# Deseq2 time
-Batch is a covariate. Testing against treatment. 
-
-VST norm for PCA
+# Import quant at gene level
 ```{r, message=FALSE, message=FALSE, warning=FALSE}
-dds <- DESeqDataSetFromTximport(txi, meta, ~batch + treatment)
-
-DESeq2Table <- DESeq(dds, parallel = T)
-# rld <- rlogTransformation(DESeq2Table, blind=TRUE)
-vst <- varianceStabilizingTransformation(DESeq2Table)
-colnames(vst) <- meta$value
+txi <- tximport(meta$salmon_path, type = "salmon", tx2gene = anno_tximport)
 ```
 
-# PCA
-```{r}
-#pca 
-library(matrixStats)
-ntop = 1000
-Pvars <- rowVars(assay(vst))
-select <- order(Pvars, decreasing = TRUE)[seq_len(min(ntop, 
-                                                      length(Pvars)))]
-PCA <- prcomp(t(assay(vst)[select, ]), scale = F)
-percentVar <- round(100*PCA$sdev^2/sum(PCA$sdev^2),1)
-dataGG = data.frame(PC1 = PCA$x[,1], PC2 = PCA$x[,2], 
-                    PC3 = PCA$x[,3], PC4 = PCA$x[,4], 
-                    line = colData(vst)$line,
-                    treatment=colData(vst)$treatment)
 
-ggplot(dataGG, aes(PC1, PC2, color=line, shape=treatment)) +
-  geom_point(size=3) +
-  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
-  ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
-  cowplot::theme_cowplot()
 
-ggplot(dataGG, aes(PC3, PC4, color=line, shape=treatment)) +
-  geom_point(size=3) +
-  xlab(paste0("PC3: ",percentVar[3],"% variance")) +
-  ylab(paste0("PC4: ",percentVar[4],"% variance")) + 
-  cowplot::theme_cowplot()
-```
+# Sex Guess
 
-## PC Loadings
-PC2 appears to separate BLAH against the rest
-
-Here are the genes which contribute most to this PC:
-```{r}
-PCA$rotation %>% as_tibble(rownames = 'Gene') %>% arrange(-abs(PC2)) %>% dplyr::select(Gene,PC2) %>% head(50) %>% DT::datatable()
-```
-
-## Visualize Loadings
-```{r}
-pcFirst <- 'PC1'
-pcSecond <- 'PC2'
-rotations <- c(pcFirst, pcSecond)
-rotation_multipler <- 100 # arbitrary value to make the loading vectors about the right size on the plot
-# rotations for pc1 and pc2
-top_rotations <- 
-  c(PCA$rotation[,str_extract(pcFirst, '\\d+') %>% as.integer()] %>% sort() %>% head(3) %>% names(),
-    PCA$rotation[,str_extract(pcFirst, '\\d+') %>% as.integer()] %>% sort() %>% tail(3) %>% names(),
-    PCA$rotation[,str_extract(pcSecond, '\\d+') %>% as.integer()] %>% sort() %>% head(3) %>% names(),
-    PCA$rotation[,str_extract(pcSecond, '\\d+') %>% as.integer()] %>% sort() %>% tail(3) %>% names()) %>% 
-  unique()
-
-dataGG %>%
-  as_tibble() %>% 
-  ggplot(., aes(.data[[pcFirst]], .data[[pcSecond]])) +
-  geom_point(size=3, aes(color=line, shape = treatment)) +
-  geom_segment(data = PCA$rotation[top_rotations,rotations] %>% data.frame(), aes(x=0,y=0, xend = .data[[pcFirst]]*rotation_multipler, yend = .data[[pcSecond]]*rotation_multipler)) +
-  ggrepel::geom_label_repel(data = PCA$rotation[top_rotations,rotations] %>% 
-                              as_tibble(rownames = 'Gene') %>% 
-                              mutate(Gene = gsub(' \\(.*','',Gene)), 
-                            aes(x=.data[[pcFirst]]*rotation_multipler, y = .data[[pcSecond]] * rotation_multipler, label = Gene)) +
-  xlab(paste0(pcFirst, ": ",percentVar[str_extract(pcFirst, '\\d+') %>% as.integer()],"% variance")) +
-  ylab(paste0(pcSecond, ": ",percentVar[str_extract(pcSecond, '\\d+') %>% as.integer()],"% variance")) + 
-  cowplot::theme_cowplot() 
-```
-
-## metamoRph
-with [metamoRph v0.22](http://github.com/davemcg/metamoRph)
-
-### Sex Guess
-```{r}
+```{r, fig.height=3, fig.width=3}
 load('~/data/metamoRph_models/sex.Rdata')
-library(org.Hs.eg.db)
-conv_table <- select(org.Hs.eg.db, keys = row.names(assay(dds,'counts')), columns = c("ENSEMBL", "GENENAME", "MAP",
-    "GENETYPE"), keytype = "SYMBOL")
+gcounts <- txi$counts
 
-gcounts <- assay(dds,'counts')
-row.names(gcounts) <- row.names(gcounts) %>% enframe() %>% left_join(conv_table %>% dplyr::select(SYMBOL,ENSEMBL) %>% filter(!duplicated(ENSEMBL), !duplicated(SYMBOL)), by = c("value" = "SYMBOL")) %>% pull(ENSEMBL)
+conv_table <- biomaRt::select(org.Hs.eg.db::org.Hs.eg.db, keys = row.names(gcounts), columns = c("ENSEMBL", "GENENAME", "MAP", "GENETYPE"), keytype = "SYMBOL")
+row.names(gcounts) <- row.names(gcounts) %>% 
+  enframe() %>% 
+  left_join(conv_table %>% dplyr::select(SYMBOL,ENSEMBL) %>% filter(!duplicated(ENSEMBL), !duplicated(SYMBOL)), 
+            by = c("value" = "SYMBOL")) %>% pull(ENSEMBL)
 
 # remove NA gene rows (where gene symbol <-> ensembl join didn't work because of multi-matches)
 projected_data_outside <- metamoRph::metamoRph(gcounts[!is.na(row.names(gcounts)),], gtex_sex$PCA$rotation, gtex_sex$center_scale)
 label_guesses_outside <- metamoRph::model_apply(sex_model, projected_data_outside)
 
-dataGG$Sex <- label_guesses_outside$predict
-dataGG$Sex_Score <- label_guesses_outside$max_score
-ggplot(dataGG, aes(PC1, PC2, color=Sex)) +
-  geom_point(size=3) +
-  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
-  ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
-  cowplot::theme_cowplot()
+meta$sexGuess <- label_guesses_outside$predict
 
-dataGG %>% dplyr::select(-contains("PC")) %>% DT::datatable()
+meta$sexGuess
 ```
 
-### Tissue Guess
+# Tissue Guess
 
 ```{r}
 load('~/data/metamoRph_models/eiad_ocular_tissue.02.Rdata')
@@ -163,259 +108,363 @@ label_guesses_outside <- metamoRph::model_apply(tissue_model, projected_data_out
 meta$Tissue_Predict <- label_guesses_outside$predict
 meta$Tissue_Score <- label_guesses_outside$max_score
 
-meta %>% DT::datatable()
+meta$Tissue_Predict
 ```
 
 
-# Heatmap
-Run clustering on sample <-> sample distances
+# Deseq2 time
+Batch is a covariate. Testing against Description. 
 
-```{r, fig.height=4, fig.width=5}
-library(ComplexHeatmap)
-sampleDists <- dist(t(assay(vst)[select, ]))
-
-sampleDistMatrix <- as.matrix(sampleDists) %>% scale(., center= FALSE)
-colnames(sampleDistMatrix) <- colData(dds)$Sample
-row.names(sampleDistMatrix) <- colData(dds)$Sample
-
-ha_column = HeatmapAnnotation(df = data.frame(Cells = meta$Cells %>% factor(),
-                                                  Treatment = meta$Treatment %>% factor()),
-                                  col = list(Cells = c("Line A" = viridis::viridis(20)[6], 
-                                                       "Line B" = viridis::viridis(20)[14]),
-                                             Treatment = c("CTRL" = viridis::magma(20)[3], 
-                                                           "BLEACH" = viridis::magma(20)[7], 
-                                                           "UNICORN HORNS" = viridis::magma(20)[11],
-                                                           "POWERFUL FLASHLIGHT" =  viridis::magma(20)[15])))
-
-
-Heatmap(sampleDistMatrix, 
-        top_annotation = ha_column,name = 'Distance',
-        col = circlize::colorRamp2(seq(0,1.4,0.1), 
-                                   colors = viridis::viridis(n = 15)))
+```{r}
+de <- mcHelpeRs::run_deseq2_analysis(input_data = txi, 
+                                     sample_metadata = meta, 
+                                     design_formula = "~Description+Batch", use_lrt = FALSE)
 ```
+
+
+## Biplot
+
+```{r, fig.width=10, fig.height=5, dpi = 300}
+biplot(de$pca_results, 
+       colby = 'Description', 
+       x = 'PC1',
+       y='PC2', 
+       lab = NULL, 
+       showLoadings = TRUE, 
+       shape = 'treatment', 
+       legendPosition = 'right') + 
+  scale_color_manual(values = pals::okabe() |> unname()) + 
+  ggtitle("All Samples")
+
+biplot(de$pca_results, 
+       colby = 'Description', 
+       x = 'PC3',
+       y='PC4', 
+       lab = NULL, 
+       showLoadings = TRUE, 
+       shape = 'treatment', 
+       legendPosition = 'right') + 
+  scale_color_manual(values = pals::okabe() |> unname()) + 
+  ggtitle("All Samples")
+```
+
 
 # Diff Testing
 
-Run Diff Testing with a contrast to remove one of the treatments
+Pull diff testing with a custom contrast.
 ``` {r, echo=FALSE,warning=FALSE,message=FALSE}
 #########
 # DE time
 #########
 
-design(dds) <- formula(~treatment + batch)
-dds <- DESeq(dds)
-res <- results(dds, contrast = c('treatment','A','B'))
+comparisonA <- 'CIHS'
+comparisonB <- 'CCHS'
+res <- results(de$dds, contrast = c('Description',
+                                    comparisonA,
+                                    comparisonB)) #%>% as_tibble(rownames = 'Gene') %>% arrange(padj, -abs(log2FoldChange))
 
-resLFC <- lfcShrink(dds, coef = "treatment_A_vs_B", type = 'apeglm')
-plotMA(resLFC)
-resLFC$pvalue %>% hist() %>% plot()
+#plotMA(res)
+#res$pvalue %>% hist() %>% plot()
 ```
 
 ## Results
-Positive is genes that are more expressed in A vs B
+Positive is genes that are more expressed in `CIHS` vs `CCHS`
 ```{r}
-resLFC %>%  as_tibble(rownames = 'Gene') %>% arrange(padj) %>% head(2000) %>% DT::datatable()
-```
-## Volcano Plot
-On the right is genes that are more expressed in A vs B
-```{r}
-volcano_maker <- function(df, title="Volcano Plot", pvalue='pvalue', padj='padj', logFC='log2FoldChange', gene_list = ''){
-  df <- df[!is.na(df$pvalue),]
-  print(dim(df))
-  df$Class <- 'Not Significant'
-  df$Class[df[,'padj'] < 0.01] <- "FDR < 0.01"
-  df$GeneT <- df$Gene
-  df$Gene[!df$Gene %in% gene_list] <- ''
-  
-  plot <- ggplot(data=df,aes(label=Gene, x = log2FoldChange, y = -log10(pvalue))) + 
-    geom_point(aes(colour=Class)) +
-    scale_colour_manual(values=c("darkred","grey")) + 
-    cowplot::theme_cowplot() +
-    geom_label_repel(data=bind_rows(subset(df, padj<0.01 & baseMean > 500) %>% arrange((log2FoldChange)) %>% head(10), 
-                                    subset(df, padj<0.01 & baseMean > 500) %>% arrange((log2FoldChange)) %>% tail(10)), 
-                     aes(label=GeneT)) +
-    xlab('logFC') + ylab('-log10(p value)') +
-    ggtitle(title) + cowplot::theme_cowplot() +
-    geom_vline(aes(xintercept=-1),linetype="dotted") +
-    geom_vline(aes(xintercept=1),linetype="dotted") 
-  plot
-}
-
-volcano_maker(df = resLFC %>% as_tibble(rownames = 'Gene')) + coord_cartesian(xlim = c(-5,5))
+res %>%  
+  as_tibble(rownames = 'Gene') %>% 
+  mutate(Comparison = paste0(comparisonA,
+                             " vs ",
+                             comparisonB)) %>% 
+  relocate(Comparison) %>% 
+  arrange(padj) %>% head(100) %>% DT::datatable()
 ```
 
 ## Dot Plots of Select Genes
-```{r, fig.width=5, fig.height=3}
-gene_ncounts <- counts(dds, normalize = TRUE)
-colnames(gene_ncounts) <- meta$value
-plot_genes <- bind_rows(subset(resLFC %>% as_tibble(rownames = 'Gene'), padj<0.01 & baseMean > 50 & log2FoldChange > 1) %>% arrange((padj)) %>% head(10), 
-                        subset(resLFC %>% as_tibble(rownames = 'Gene'), padj<0.01 & baseMean > 50 & log2FoldChange < -1) %>% arrange((padj)) %>% head(10)) %>% pull(Gene)
-gene_ncount %>% as_tibble(rownames = 'Gene') %>% 
+```{r, fig.width=18, fig.height=10}
+gene_ncounts <- counts(de$dds, normalize = TRUE)
+colnames(gene_ncounts) <- de$dds$sample
+plot_genes <- bind_rows(subset(res %>% as_tibble(rownames = 'Gene'), padj<0.01 & baseMean > 100 & log2FoldChange > 1) %>% arrange((padj)) %>% head(10), 
+                        subset(res %>% as_tibble(rownames = 'Gene'), padj<0.01 & baseMean > 100 & log2FoldChange < -1) %>% arrange((padj)) %>% head(10)) %>% pull(Gene)
+
+gene_ncounts %>% 
+  as_tibble(rownames = 'Gene') %>% 
   pivot_longer(-Gene) %>% 
-  left_join(meta, by = c('name' = 'Sample')) %>% 
-  filter(Gene %in% plot_genes) %>% 
-  ggplot(aes(x=Time, y = log2(value), color = Genotype)) + 
+  left_join(colData(de$dds) %>% as_tibble(), by = c('name' = 'sample')) %>% 
+  filter(Gene %in% plot_genes, 
+         Description %in% c(comparisonA, comparisonB)) %>% 
+  ggplot(aes(y=Description, x = log2(value+1))) + 
   geom_boxplot(color = 'black') +
   geom_point() + 
-  ylab("log2(norm count)") +
+  xlab("log2(norm count)") +
   facet_wrap(~Gene, scales = 'free_x') +
-  cowplot::theme_cowplot() +
-  coord_flip()
+  cowplot::theme_cowplot() 
 ```
+
+
+## Volcano Plot
+
+```{r}
+mcHelpeRs::volcano_maker(df = res %>% as_tibble(rownames = 'Gene'), 
+                         pos_label = "CIHS",
+                         neg_label = "CCHS") + 
+  coord_cartesian(xlim = c(-7,7))
+```
+
 
 # Enrichment Analysis (GO and Pathway)
 
 ## GO Enrichment 
+
 ```{r}
-library(clusterProfiler)
-library(enrichplot)
+# remove low count genes (<1 count per sample)
+lc_genes <- de$raw_counts[de$raw_counts %>% rowSums() < ncol(de$raw_counts),] %>% row.names()
+resFILTER <- res %>% 
+  as_tibble(rownames = 'Gene') %>% 
+  filter(!Gene %in% lc_genes)
 
+msig <- mcHelpeRs::prepare_msigdb_sets()
 
-diff_genes <- resLFC %>% as_tibble(rownames = 'Gene') %>% filter(padj < 0.01, abs(log2FoldChange) > 1) 
-eg_diff_genes <- bitr(diff_genes$Gene, fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Hs.eg.db")
-eg_diff_genes <- diff_genes %>% left_join(., eg_diff_genes, by = c('Gene' = 'SYMBOL'))
-# only keep genes that have a mean of >= 10 reads across all sample
-expressed <- txi$counts[txi$counts %>% rowMeans() > 10,] %>% row.names()
-eg_universe = bitr(resLFC %>% as_tibble(rownames = 'Gene') %>% filter(Gene %in% expressed) %>% pull(Gene), fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Hs.eg.db")
-ego <- enrichGO(gene          = eg_diff_genes$ENTREZID,
-                universe      = eg_universe$ENTREZID,
-                OrgDb         = org.Hs.eg.db,
-                ont           = "all",
-                pAdjustMethod = "BH",
-                pvalueCutoff  = 0.01,
-                qvalueCutoff  = 0.05,
-                readable      = TRUE)
+de$ego <- mcHelpeRs::run_ora(universe = resFILTER %>% pull(Gene),
+                             diff_genes = resFILTER %>% filter(abs(log2FoldChange) > 1, padj < 0.05),
+                             term2name = msig$descriptions, 
+                             term2gene = bind_rows(msig$cp, msig$go))
+
 ```
 
-```{r, fig.width=3, fig.height=5}
-p1 <- dotplot(ego, showCategory=30) + ggtitle("Dotplot for GO")
-p1
-```
+<!-- ```{r, fig.height=12, fig.width=50} -->
+<!-- de$ego@result %>%  -->
+<!--   filter(qvalue < 0.05) %>%  -->
+<!--   separate(GeneRatio,sep = '/', into = c("GeneNumerator","GeneDenominator")) %>%  -->
+<!--   mutate(GeneCount = as.integer(GeneNumerator), -->
+<!--          GeneDenominator = as.integer(GeneDenominator), -->
+<!--          GeneRatio = GeneCount/GeneDenominator) %>%  -->
+<!--   mutate(Description = forcats::fct_reorder(Description, GeneRatio)) %>%  -->
+<!--   mutate(significance = case_when(qvalue < 0.001 ~ "q<0.001", -->
+<!--                                   qvalue < 0.01 ~ "q<0.01", -->
+<!--                                   qvalue < 0.05 ~ "q<0.05", -->
+<!--                                   qvalue < 0.1 ~ "q<0.1", -->
+<!--                                   TRUE ~ "q>0.1")) %>%  -->
+<!--   ggplot(aes(x=GeneRatio,y=Description,color = significance, size = GeneCount)) + -->
+<!--   geom_point() + -->
+<!--   cowplot::theme_cowplot() + -->
+<!--   scale_color_manual(values = c(viridis::viridis(n=10)[c(10,8,6,4,1)]))  -->
+<!-- ``` -->
+
 
 ### Table
 ```{r}
-ego <- setReadable(ego, OrgDb = org.Hs.eg.db, keyType = 'ENTREZID')
-ego@result %>% DT::datatable()
-```
-
-### Table
-```{r}
-ego@result %>% DT::datatable()
-```
-
-### "CNET" Plot
-Relationships between related GO terms with shared genes
-```{r, fig.width=6, fig.height=4}
-geneList <- eg_diff_genes$log2FoldChange
-names(geneList) <- eg_diff_genes$Gene
-cnet <- cnetplot(ego, foldChange = geneList) + scale_color_viridis_c(name = 'log2(FoldChange)')
-cnet
-```
-
-### Enriched GO Term Relationships
-Shows the "sets" of GO terms to increase understanding of what the diff gene sets are doing. There are many related GO terms.
-```{r, fig.width=8, fig.height=8}
-ego_pair <- pairwise_termsim(ego) 
-go_term_relationships <- emapplot(ego_pair,layout="kk") #+ ggtitle("Enriched GO Term Relationships")
-go_term_relationships
-```
-
-## Wikipathways
-```{r}
-# system("wget https://wikipathways-data.wmcloud.org/current/gmt/wikipathways-20230210-gmt-Homo_sapiens.gmt")
-wp2gene <- read.gmt('wikipathways-20230210-gmt-Homo_sapiens.gmt')
-wp2gene <- wp2gene %>% tidyr::separate(term, c("name","version","wpid","org"), "%")
-wpid2gene <- wp2gene %>% dplyr::select(wpid, gene) #TERM2GENE
-wpid2name <- wp2gene %>% dplyr::select(wpid, name) #TERM2NAME
-ewp <- enricher(eg_diff_genes$ENTREZID,
-                TERM2GENE = wpid2gene,
-                TERM2NAME = wpid2name,
-                pvalueCutoff = 0.1)
-ewp_plot <- dotplot(ewp, showCategory=30) + ggtitle("Dotplot for WikiPathways")
-```
-
-```{r, fig.width=4, fig.height=3}
-ewp_plot
-```
-### Table
-```{r}
-ewp <- setReadable(ewp, OrgDb = org.Hs.eg.db, keyType = 'ENTREZID')
-ewp@result %>% DT::datatable()
+de$ego@result %>% 
+  arrange(pvalue) %>% 
+  filter(qvalue < 0.05) %>% 
+  DT::datatable()
 ```
 
 ## GSEA
+
 ```{r}
-all_genes <- bitr(resLFC %>% as_tibble(rownames = 'Gene') %>% filter(Gene %in% expressed) %>% pull(Gene), fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Hs.eg.db")
-all_genes <- all_genes %>% left_join(resLFC %>% as_tibble(rownames = 'SYMBOL'), by = c('SYMBOL'))
-logFC <- all_genes$log2FoldChange
-names(logFC) <- all_genes$ENTREZID
-logFC <- na.omit(logFC)
-logFC = sort(logFC, decreasing = TRUE)
-gse <- gseGO(geneList=logFC,
-             ont ="ALL",
-             keyType = "ENTREZID",
-             pvalueCutoff = 0.05,
-             OrgDb = org.Hs.eg.db,
-             pAdjustMethod = "BH")
+
+de$gsea <- mcHelpeRs::run_gsea(res_df =  resFILTER,
+                             term2name = msig$descriptions, 
+                             term2gene = bind_rows(msig$cp, msig$go), pvalueCutoff = 1)
+
 ```
 
-```{r, fig.width=4, fig.height=5}
-dotplot(gse, showCategory=10, split=".sign") + facet_grid(.~.sign)
-```
+<!-- ```{r, fig.height=12, fig.width=50} -->
+<!-- de$ego@result %>%  -->
+<!--   filter(qvalue < 0.05) %>%  -->
+<!--   separate(GeneRatio,sep = '/', into = c("GeneNumerator","GeneDenominator")) %>%  -->
+<!--   mutate(GeneCount = as.integer(GeneNumerator), -->
+<!--          GeneDenominator = as.integer(GeneDenominator), -->
+<!--          GeneRatio = GeneCount/GeneDenominator) %>%  -->
+<!--   mutate(Description = forcats::fct_reorder(Description, GeneRatio)) %>%  -->
+<!--   mutate(significance = case_when(qvalue < 0.001 ~ "q<0.001", -->
+<!--                                   qvalue < 0.01 ~ "q<0.01", -->
+<!--                                   qvalue < 0.05 ~ "q<0.05", -->
+<!--                                   qvalue < 0.1 ~ "q<0.1", -->
+<!--                                   TRUE ~ "q>0.1")) %>%  -->
+<!--   ggplot(aes(x=GeneRatio,y=Description,color = significance, size = GeneCount)) + -->
+<!--   geom_point() + -->
+<!--   cowplot::theme_cowplot() + -->
+<!--   scale_color_manual(values = c(viridis::viridis(n=10)[c(10,8,6,4,1)]))  -->
+<!-- ``` -->
+
 
 ### Table
 ```{r}
-gse <- setReadable(gse, OrgDb = org.Hs.eg.db)
-gse@result %>% as_tibble() %>% arrange(p.adjust) %>% filter(p.adjust < 0.01) %>% DT::datatable()
+de$gsea@result %>% 
+  arrange(pvalue) %>% 
+  filter(qvalue < 0.05) %>% 
+  DT::datatable()
 ```
 
+<!-- ### "CNET" Plot -->
+<!-- Relationships between related GO terms with shared genes -->
+<!-- ```{r, fig.width=6, fig.height=4} -->
+<!-- geneList <- eg_diff_genes$log2FoldChange -->
+<!-- names(geneList) <- eg_diff_genes$Gene -->
+<!-- cnet <- cnetplot(ego, foldChange = geneList) + scale_color_viridis_c(name = 'log2(FoldChange)') -->
+<!-- cnet -->
+<!-- ``` -->
 
-### Heatmaps
+<!-- ### Enriched GO Term Relationships -->
+<!-- Shows the "sets" of GO terms to increase understanding of what the diff gene sets are doing. There are many related GO terms. -->
+<!-- ```{r, fig.width=8, fig.height=8} -->
+<!-- ego_pair <- pairwise_termsim(ego)  -->
+<!-- go_term_relationships <- emapplot(ego_pair,layout="kk") #+ ggtitle("Enriched GO Term Relationships") -->
+<!-- go_term_relationships -->
+<!-- ``` -->
 
-#### G protein-coupled receptor activity GO:0004930
-```{r, fig.width=10, fig.height=8}
-relative <- log2(counts(dds, normalize = TRUE) + 1) # add a pseudocount of 1 as log2(0) is infinity
-colnames(relative) <- meta$Library
-row_means <- rowMeans(relative)
-relative <- relative - row_means
-#relative_g <-  relative
+<!-- ## Wikipathways -->
+<!-- ```{r} -->
+<!-- # system("wget https://wikipathways-data.wmcloud.org/current/gmt/wikipathways-20230210-gmt-Homo_sapiens.gmt") -->
+<!-- wp2gene <- read.gmt('wikipathways-20230210-gmt-Homo_sapiens.gmt') -->
+<!-- wp2gene <- wp2gene %>% tidyr::separate(term, c("name","version","wpid","org"), "%") -->
+<!-- wpid2gene <- wp2gene %>% dplyr::select(wpid, gene) #TERM2GENE -->
+<!-- wpid2name <- wp2gene %>% dplyr::select(wpid, name) #TERM2NAME -->
+<!-- ewp <- enricher(eg_diff_genes$ENTREZID, -->
+<!--                 TERM2GENE = wpid2gene, -->
+<!--                 TERM2NAME = wpid2name, -->
+<!--                 pvalueCutoff = 0.1) -->
+<!-- ewp_plot <- dotplot(ewp, showCategory=30) + ggtitle("Dotplot for WikiPathways") -->
+<!-- ``` -->
 
-gene_set<- (gse@result %>% filter(ID == 'GO:0004930') %>% pull(core_enrichment) %>% str_split(., '\\/'))[[1]]
+<!-- ```{r, fig.width=4, fig.height=3} -->
+<!-- ewp_plot -->
+<!-- ``` -->
+<!-- ### Table -->
+<!-- ```{r} -->
+<!-- ewp <- setReadable(ewp, OrgDb = org.Hs.eg.db, keyType = 'ENTREZID') -->
+<!-- ewp@result %>% DT::datatable() -->
+<!-- ``` -->
+
+<!-- ### Heatmaps -->
+
+<!-- #### G protein-coupled receptor activity GO:0004930 -->
+<!-- ```{r, fig.width=10, fig.height=8} -->
+<!-- relative <- log2(counts(dds, normalize = TRUE) + 1) # add a pseudocount of 1 as log2(0) is infinity -->
+<!-- colnames(relative) <- meta$Library -->
+<!-- row_means <- rowMeans(relative) -->
+<!-- relative <- relative - row_means -->
+<!-- #relative_g <-  relative -->
+
+<!-- gene_set<- (gse@result %>% filter(ID == 'GO:0004930') %>% pull(core_enrichment) %>% str_split(., '\\/'))[[1]] -->
 
 
-library(ComplexHeatmap)
-hm_matrix <- relative[gene_set, meta %>% arrange(Condition, Library) %>% pull(Library)]
+<!-- library(ComplexHeatmap) -->
+<!-- hm_matrix <- relative[gene_set, meta %>% arrange(Condition, Library) %>% pull(Library)] -->
 
-ha_column = HeatmapAnnotation(df = data.frame(Condition = meta %>% arrange(Condition, Library) %>% pull(Condition)),
-                              col = list(Condition = c("GFP+" = viridis::magma(20)[5], 
-                                                       "ctrl center" = viridis::magma(20)[8],
-                                                       "ctrl periphery" = viridis::magma(20)[14])))
+<!-- ha_column = HeatmapAnnotation(df = data.frame(Condition = meta %>% arrange(Condition, Library) %>% pull(Condition)), -->
+<!--                               col = list(Condition = c("GFP+" = viridis::magma(20)[5],  -->
+<!--                                                        "ctrl center" = viridis::magma(20)[8], -->
+<!--                                                        "ctrl periphery" = viridis::magma(20)[14]))) -->
 
-Heatmap(hm_matrix, 
-        cluster_columns = FALSE,
-        cluster_rows = TRUE, 
-        name = 'log2(Fold\nChange)', 
-        top_annotation = ha_column, 
-        col = circlize::colorRamp2(
-          seq(-8, 8, length.out = 11), 
-          RColorBrewer::brewer.pal(11, "RdBu")
-        ))
-```
+<!-- Heatmap(hm_matrix,  -->
+<!--         cluster_columns = FALSE, -->
+<!--         cluster_rows = TRUE,  -->
+<!--         name = 'log2(Fold\nChange)',  -->
+<!--         top_annotation = ha_column,  -->
+<!--         col = circlize::colorRamp2( -->
+<!--           seq(-8, 8, length.out = 11),  -->
+<!--           RColorBrewer::brewer.pal(11, "RdBu") -->
+<!--         )) -->
+<!-- ``` -->
 
-## KEGG Pathway Enrichment
-```{r, fig.width=3}
-kk <- enrichKEGG(gene         = eg_diff_genes$ENTREZID, 
-                 universe = eg_universe$ENTREZID,
-                 organism     = 'hsa',
-                 pvalueCutoff = 0.1)
-dotplot(kk) + ggtitle("KEGG Pathway Enrichment") 
-```
+<!-- ## KEGG Pathway Enrichment -->
+<!-- ```{r, fig.width=3} -->
+<!-- kk <- enrichKEGG(gene         = eg_diff_genes$ENTREZID,  -->
+<!--                  universe = eg_universe$ENTREZID, -->
+<!--                  organism     = 'hsa', -->
+<!--                  pvalueCutoff = 0.1) -->
+<!-- dotplot(kk) + ggtitle("KEGG Pathway Enrichment")  -->
+<!-- ``` -->
 
-### Table
+<!-- ### Table -->
+<!-- ```{r} -->
+<!-- kk <- setReadable(kk, OrgDb = org.Hs.eg.db, keyType = 'ENTREZID') -->
+<!-- kk@result %>% as_tibble() %>% arrange(p.adjust) %>% filter(p.adjust < 0.01) %>% DT::datatable() -->
+<!-- ``` -->
+
 ```{r}
-kk <- setReadable(kk, OrgDb = org.Hs.eg.db, keyType = 'ENTREZID')
-kk@result %>% as_tibble() %>% arrange(p.adjust) %>% filter(p.adjust < 0.01) %>% DT::datatable()
+# need a gene (symbols) by sample matrix
+# that is normalized (at least cpm/log1p)
+# or vst
+# or something else
+
+# vst (start with this)
+dds_filter <-  de$dds[,colData(de$dds)$Description %in% c(comparisonA, comparisonB)] 
+
+norm_name_mat <- assay(dds_filter, 'counts') %>% vst()
+colnames(norm_name_mat) <- dds_filter$sample
+
+# filter down to comparisonA and B
+# CPM
+#norm_name_mat <- de$counts %>% edgeR::cpm() %>% {.+1} %>% log2()
+# raw counts (dangerous!)
+#norm_name_mat <- de$counts %>% {.+1} %>% log2()
 ```
+
+```{r}
+
+msig_cp_list <-  split(msig$cp$gene_symbol, msig$cp$gs_name)
+msig_go_list <-  split(msig$go$gene_symbol, msig$go$gs_name)
+
+gsva_param <- gsvaParam(
+  norm_name_mat,
+  c(msig_cp_list, msig_go_list),
+  # as there is transformed data
+  kcdf = "Gaussian", 
+  # ignores gene sets with less than 10 or more than 500 genes
+  minSize = 10, maxSize = 500,
+)
+
+gsva_res <- gsva(gsva_param, verbose=FALSE)
+```
+
+# Diff Expression of Pathways
+
+DESeq2 requires raw (nonnegative) counts. 
+
+limma doesn't really care. 
+
+If you have multiple conditions in your comparison then take some care with the logFC calculations.
+
+```{r, fig.width=16, fig.height=9}
+gsva_meta <- colData(dds_filter) %>% as_tibble()
+gsva_meta$Description <- relevel(gsva_meta$Description, ref = "Complement competent human serum (CCHS)")
+mod <- model.matrix(~factor(gsva_meta$Description))
+fit <- lmFit(gsva_res, mod)
+fit <- eBayes(fit)
+
+gsva_limma <- gsva_res %>% as_tibble(rownames = 'gene set') %>% 
+  left_join(topTable(fit, number = Inf) %>% as_tibble(rownames = 'gene set')) %>% 
+  arrange(adj.P.Val, P.Value)
+
+#gsva_limma$adj.P.Val %>% hist()
+
+mcHelpeRs::volcano_maker(gsva_limma %>% mutate(Gene = str_wrap(gsub("_"," ", `gene set`), 20),
+                                               baseMean = 1000), 
+                         logFC_cutoff = c(-0.5,0.5), 
+                         logFC = "logFC", pvalue = "P.Value", padj = "adj.P.Val",
+                         pos_label = "CCHS + HERV-K KD",
+                         neg_label = "CCHS") +
+  xlab("GSVA Pathway Change")
+```
+
+
+# Terms with adjusted Pval < 0.05
+
+I am listing all the genes in the pathway or gene set. This will include genes which are not differentially expressed between your conditions. 
+```{r}
+gsva_limma %>% 
+  filter(adj.P.Val < 0.05) %>% 
+  left_join(c(msig_cp_list, msig_go_list) %>% 
+              enframe() %>% 
+              dplyr::rename(`gene set` = name) %>% 
+              unnest(value) %>% group_by(`gene set`) %>% 
+              summarise(genes = paste0(value, collapse = ', '))) %>% 
+  DT::datatable()
+```
+
 
 # Outputs
 
@@ -441,19 +490,13 @@ write_csv(resLFC %>% as_tibble(rownames = 'Gene') %>% arrange(-abs(log2FoldChang
 write_csv(res %>% as_tibble(rownames = 'Gene') %>% arrange(-abs(log2FoldChange)), file = '../data/analysis_00_diff_table_raw.freeze01.csv')
 
 library(SummarizedExperiment)
-counts <- assay(dds, 'counts') 
-colnames(counts) <- meta$Library
-norm_counts <- counts(dds, normalize = TRUE) 
-colnames(norm_counts) <- meta$Library
-tpm <- txi$abundance
-colnames(tpm) <- meta$Library
-rse <- SummarizedExperiment(assays = list(counts = counts,
-                                          deseq_counts = norm_counts,
-                                          tpm = tpm), colData = meta)
+norm_counts <- counts(dds, normalize = TRUE)
+colnames(norm_counts) <- dds$sample
+rse <- SummarizedExperiment(assays = list(counts = norm_counts,
+                                         tpm = tpm), colData = meta)
 colnames(rse) <- meta$Library
 save(rse, file = '../data/analysis_00.rse.geyser.Rdata')
 ```
-
 
 
 
