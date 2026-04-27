@@ -34,7 +34,7 @@ for line in open(sample_run_setup):
 		sample_run_dict[line[0]] = oval
 
 
-# MODIFICATION START: Define sample batches
+# Define sample batches
 # This section divides the total list of samples into smaller batches of 50.
 batch_size = 50
 sample_batches = {}
@@ -43,7 +43,6 @@ for i, sample in enumerate(sample_files):
 	if batch_num not in sample_batches:
 		sample_batches[batch_num] = []
 	sample_batches[batch_num].append(sample)
-# MODIFICATION END
 
 
 fq_dir = config['fastq_dir']
@@ -113,7 +112,7 @@ else:
 			'salmon_quant_output.tsv'
 
 
-# MODIFICATION START: Checkpoint rule to process samples in batches.
+# Checkpoint rule to process samples in batches.
 # Snakemake will ensure the inputs for one batch are created before moving to the next,
 # managing resource usage. The output is a simple flag file to signal completion.
 def get_batch_salmon_files(wildcards):
@@ -137,8 +136,6 @@ checkpoint process_batch:
 		star=get_batch_star_files
 	output:
 		touch("batch_complete/{batch}.done")
-# MODIFICATION END
-
 
 rule aggregate_fq:
 	# merge run level files to the sample level
@@ -235,7 +232,6 @@ rule STAR_index:
 		rm tmp_fasta
 		rm tmp_gtf
  		"""
-
 
 rule salmon_quant:
 	input:
@@ -352,7 +348,6 @@ rule multiqc:
 		"""
 		multiqc {params.search_dirs} -o {params.outdir} -n multiqc_report.html
 		"""
-
 
 # genotype calling (check kinship scores)
 rule index_reference:
