@@ -89,7 +89,16 @@ FASTQC_OUTPUT = ['fastqc/' + sample + '.done' \
 localrules: all, print_quants  
 #print(sample_run_dict)
 
-if config['star']:
+
+if config['kinship']:
+	rule all:
+		input:
+			'kinship/kinship_scores.kin0',
+			'counts/gene_counts.csv.gz',
+			'salmon_quant_output.tsv',
+			'multiqc/multiqc_report.html',
+			'STAR_output.tsv'
+elif config['star']:
 	rule all:
 		input:
 			'counts/gene_counts.csv.gz',
@@ -101,7 +110,7 @@ else:
 		input:
 			'counts/gene_counts.csv.gz',
 			'multiqc/multiqc_report.html',
-			'salmon_quant_output.tsv',
+			'salmon_quant_output.tsv'
 
 
 # MODIFICATION START: Checkpoint rule to process samples in batches.
@@ -343,3 +352,89 @@ rule multiqc:
 		"""
 		multiqc {params.search_dirs} -o {params.outdir} -n multiqc_report.html
 		"""
+
+
+# genotype calling (check kinship scores)
+rule index_reference:
+    input:
+        fasta = config['annotation_path'] + config['genome']
+    output:
+        fai = config['annotation_path'] + config['genome'] + ".fai",
+        dict_file = config['annotation_path'] + re.sub(r'\.fa\.gz$|\.fasta\.gz$', '.dict', config['genome'])
+    conda: 'OGVFB_RNAseq.yml'
+    shell:
+        """
+        samtools faidx {input.fasta}
+        gatk CreateSequenceDictionary -R {input.fasta} -O {output.dict_file}
+        """
+
+rule gatk_genotype_sample:
+    input:
+        bam = 'STAR_align/{sample}/{sample}_aligned.sortedByCoord.out.bam',
+        ref = config['annotation_path'] + config['genome'],
+        fai = config['annotation_path'] + config['genome'] + ".fai",
+        dict_file = config['annotation_path'] + re.sub(r'\.fa\.gz$|\.fasta\.gz$', '.dict', config['genome'])
+    output:
+        vcf = 'gatk_calls/{sample}_filtered.vcf.gz'
+    params:
+        tmp = '/lscratch/$SLURM_JOB_ID/gatk_{sample}'
+    conda: 'OGVFB_RNAseq.yml'
+    shell:
+        """
+        mkdir -p {params.tmp}
+        
+        # 1. Add Generic Read Groups (Required for GATK)
+        gatk AddOrReplaceReadGroups \
+            -I {input.bam} -O {params.tmp}/rg.bam \
+            -RGID {wildcards.sample} -RGLB lib1 -RGPL ILLUMINA -RGPU unit1 -RGSM {wildcards.sample}
+            
+        # 2. Mark Duplicates
+        gatk MarkDuplicates \
+            -I {params.tmp}/rg.bam -O {params.tmp}/marked.bam \
+            -M {params.tmp}/metrics.txt
+            
+        # 3. SplitNCigarReads (handle introns)
+        gatk SplitNCigarReads \
+            -R {input.ref} -I {params.tmp}/marked.bam -O {params.tmp}/split.bam
+            
+        # 4. HaplotypeCaller
+        gatk HaplotypeCaller \
+            -R {input.ref} -I {params.tmp}/split.bam -O {params.tmp}/raw.vcf.gz \
+            --dont-use-soft-clipped-bases -standard-min-confidence-threshold-for-calling 20.0
+            
+        # 5. VariantFiltration (Hard filters for kinship)
+        gatk VariantFiltration \
+            -R {input.ref} -V {params.tmp}/raw.vcf.gz -O {output.vcf} \
+            --cluster-window-size 35 --cluster-size 3 \
+            --filter-name "FS" --filter-expression "FS > 30.0" \
+            --filter-name "QD" --filter-expression "QD < 2.0"
+            
+        # Cleanup large intermediate BAMs
+        rm -rf {params.tmp}
+        """
+
+rule plink_kinship:
+    input:
+        vcfs = expand('gatk_calls/{sample}_filtered.vcf.gz', sample=sample_files)
+    output:
+        table = 'kinship/kinship_scores.kin0'
+    conda: 'OGVFB_RNAseq.yml'
+    shell:
+        """
+        # Merge individual VCFs (using bcftools or gatk)
+        bcftools merge {input.vcfs} -Oz -o kinship/merged_raw.vcf.gz
+        
+        # Filter for SNPs only and remove Sex Chromosomes (assuming chrX, chrY or X, Y)
+        # We also filter for biallelic SNPs which are best for kinship
+        bcftools view kinship/merged_raw.vcf.gz \
+            --types snps \
+            --min-alleles 2 --max-alleles 2 \
+            --targets ^chrX,chrY,X,Y \
+            -Oz -o kinship/merged_filtered.vcf.gz
+            
+        # Run PLINK2 Kinship
+        plink2 --vcf kinship/merged_filtered.vcf.gz \
+            --make-king-table \
+            --out kinship/kinship_scores
+            
+        """
