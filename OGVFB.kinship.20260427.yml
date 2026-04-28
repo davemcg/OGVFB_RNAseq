@@ -1,0 +1,9 @@
+name: OGVFBkinship
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - bcftools
+  - plink2
+  - gatk
