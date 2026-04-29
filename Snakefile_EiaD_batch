@@ -45,6 +45,20 @@ for i, sample in enumerate(sample_files):
 		sample_batches[batch_num] = []
 	sample_batches[batch_num].append(sample)
 
+# Map samples back to their batch for dependency tracking
+sample_to_batch = {}
+for batch_num, samples in sample_batches.items():
+	for sample in samples:
+		sample_to_batch[sample] = batch_num
+
+# Function to pause execution until the previous batch is finished
+def wait_for_prev_batch(wildcards):
+	batch_num = sample_to_batch[wildcards.sample]
+	if batch_num > 0:
+		return f"batch_complete/{batch_num - 1}.done"
+	return []
+
+
 
 fq_dir = config['fastq_dir']
 
@@ -129,7 +143,7 @@ def get_batch_salmon_files(wildcards):
 	return expand('salmon_quant/{sample}/quant.sf', sample=samples)
 
 def get_batch_star_files(wildcards):
-	if config['star']:
+	if config.get('star'):
 		samples = sample_batches[int(wildcards.batch)]
 		return expand('STAR_align/{sample}/{sample}_aligned.sortedByCoord.out.bam', sample=samples)
 	return []
@@ -138,11 +152,26 @@ def get_batch_fastqc_files(wildcards):
 	samples = sample_batches[int(wildcards.batch)]
 	return expand('fastqc/{sample}.done', sample=samples)
 
-checkpoint process_batch:
+def get_batch_bigwig_files(wildcards):
+	if config.get('bigwig'):
+		samples = sample_batches[int(wildcards.batch)]
+		return expand('bigwig/{sample}.bw', sample=samples)
+	return []
+
+def get_batch_vcf_files(wildcards):
+	if config.get('kinship'):
+		samples = sample_batches[int(wildcards.batch)]
+		return expand('gatk_calls/{sample}_filtered.vcf.gz', sample=samples)
+	return []
+
+# Use a standard rule to bundle batch requirements
+rule process_batch:
 	input:
 		fastqc=get_batch_fastqc_files,
 		salmon=get_batch_salmon_files,
-		star=get_batch_star_files
+		star=get_batch_star_files,
+		bigwig=get_batch_bigwig_files,
+		vcf=get_batch_vcf_files
 	output:
 		touch("batch_complete/{batch}.done")
 
@@ -159,20 +188,22 @@ rule aggregate_fq:
 
 rule trim_fastq_se:
 	input:
-		fq_dir + '/{sample}' + config['fqS_suffix']
+		fq = fq_dir + '/{sample}' + config['fqS_suffix'],
+		prev_batch = wait_for_prev_batch
 	output:
 		temp('fastq_trimmed/{sample}' + config['fqS_suffix']),
 	threads: 8
 	conda: 'OGVFB_RNAseq.yml'
 	shell:
 		"""
-		fastp --thread {threads} -i {input} -o {output}
+		fastp --thread {threads} -i {input.fq} -o {output}
 		"""
 
 rule trim_fastq_pe:
 	input:
 		r1 = ancient(fq_dir + '/{sample}' + config['fq1_suffix']),
-		r2 = ancient(fq_dir + '/{sample}' + config['fq2_suffix'])
+		r2 = ancient(fq_dir + '/{sample}' + config['fq2_suffix']),
+		prev_batch = wait_for_prev_batch
 	output:
 		r1 = temp('fastq_trimmed/{sample}' + config['fq1_suffix']),
 		r2 = temp('fastq_trimmed/{sample}' + config['fq2_suffix']),
@@ -294,7 +325,8 @@ rule STAR_align:
 
 rule deeptools_bamCoverage:
 	input:
-		bam = 'STAR_align/{sample}/{sample}_aligned.sortedByCoord.out.bam'
+		bam = 'STAR_align/{sample}/{sample}_aligned.sortedByCoord.out.bam',
+		bai = 'STAR_align/{sample}/{sample}_aligned.sortedByCoord.out.bam.bai'
 	output:
 		bw = 'bigwig/{sample}.bw'
 	threads: 8
