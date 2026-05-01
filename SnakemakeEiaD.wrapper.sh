@@ -21,10 +21,13 @@ sbcmd="sbatch --cpus-per-task={threads} \
 
 
 snakemake -s /home/mcgaugheyd/git/OGVFB_RNAseq/Snakefile_EiaD_batch \
+  --scheduler greedy \
   --rerun-triggers mtime \
-  -pr --local-cores 2 --jobs 500 \
+  -pr --local-cores 2 --jobs 501 \
+  --resources disk="20TB" \
   --cluster-config /home/mcgaugheyd/git/OGVFB_RNAseq/cluster.json \
   --cluster "$sbcmd"  --latency-wait 120 --rerun-incomplete \
   --configfile $1 --use-conda \
   -k --restart-times 0 \
-  --resources parallel=4 
+  --resources parallel=4
+
