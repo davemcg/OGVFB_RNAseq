@@ -5,3 +5,8 @@ channels:
   - defaults
 dependencies:
   - deeptools =3.5.5
+  - r>=4.2.0
+  - r-tidyverse
+  - r-data.table
+  - bioconductor-plyranges
+  - bioconductor-genomicranges
