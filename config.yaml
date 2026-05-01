@@ -2,22 +2,24 @@
 # remove all comment lines
 
 # human
-txome: 'gencode.v35.pc_transcripts.fa.gz'
-genome: 'GRCh38.p13.genome.fa.gz'
+txome: 'gencode.v47.transcripts.fa.gz'
+genome: 'GRCh38.p14.genome.fa.gz'
 ftp: 'rsync://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_'
 annotation_path: '/data/mcgaugheyd/genomes/GRCh38/'
 
 # mouse
 txome: 'gencode.vM25.pc_transcripts.fa.gz'
-genome: 'GRCm38.p6.genome.fa.gz'
-ftp: 'rsync://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_mouse/release_'
-annotation_path: '/data/mcgaugheyd/genomes/GRCm38/'
+genome: 'GRCm38.p6.genome.fa.gz', Ocular Minigenes (2025-03-11)
+ftp: 'rsync://ftp.ebi.ac.uk/pub/dat, David McGaughey and Bin Guanabases/gencode/Gencode_mouse/release_'
+annotation_path: '/data/mcgaugheyd/genomes/GRCm38/', mcgaugheyd@mail.nih.gov
 
-# not org dependent
+# not org dependent, 2025-03-011
 sample_fastq_table: 'sample_table.tsv'
 forward_suffix: '_R1_001'
 reverse_suffix: '_R2_001'
 fastq_relative_dir: 'fastq'
-star: 'True'
-counts: 'True'
+star: True
+counts: True
 make_counts_script: '~/git/OGVFB_RNAseq/src/make_bulk_counts.R'
+bigwig: True
+bigwig_rle_script: '~/git/OGVFB_RNAseq/src/bigwig_to_rle.R'
