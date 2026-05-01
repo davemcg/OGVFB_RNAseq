@@ -9,9 +9,9 @@ sample_run_setup = config['sample_fastq_table']
 # format of study_fq_tsv
 # tab separated
 # setup is either "paired" or "single"
-# header of: sample_accession	run_accession_prefix	setup
+# header of: sample_accession   run_accession_prefix    setup
 # example line:
-# D3C_D0	D3C_D0_1__HJLT7DSX3_19270591_S73_L002	paired
+# D3C_D0    D3C_D0_1__HJLT7DSX3_19270591_S73_L002   paired
 # ending of run_accession taken from config.yaml
 for line in open(sample_run_setup):
 	if len(line.split('\t')) != 3:
@@ -32,33 +32,6 @@ for line in open(sample_run_setup):
 		oval = sample_run_dict[line[0]]
 		oval.append(line[1])
 		sample_run_dict[line[0]] = oval
-
-
-# Define sample batches
-# This section divides the total list of samples into smaller batches of 50 
-# (or whatever the yaml config says)
-batch_size = int(config.get('batch_size', 50))
-sample_batches = {}
-for i, sample in enumerate(sample_files):
-	batch_num = i // batch_size
-	if batch_num not in sample_batches:
-		sample_batches[batch_num] = []
-	sample_batches[batch_num].append(sample)
-
-# Map samples back to their batch for dependency tracking
-sample_to_batch = {}
-for batch_num, samples in sample_batches.items():
-	for sample in samples:
-		sample_to_batch[sample] = batch_num
-
-# Function to pause execution until the previous batch is finished
-def wait_for_prev_batch(wildcards):
-	batch_num = sample_to_batch[wildcards.sample]
-	if batch_num > 0:
-		return f"batch_complete/{batch_num - 1}.done"
-	return []
-
-
 
 fq_dir = config['fastq_dir']
 
@@ -92,91 +65,43 @@ wildcard_constraints:
 SALMON_QUANT_OUTPUT = ['salmon_quant/' + sample + '/quant.sf'  \
 	for sample in sample_files]
 
-# STAR bam
 STAR_QUANT_OUTPUT = ['STAR_align/' + sample + '/' + sample + '_aligned.sortedByCoord.out.bam'  \
 	for sample in sample_files]
 
-# fastqc of each sample pairSAMPLE_DICT
 FASTQC_OUTPUT = ['fastqc/' + sample + '.done' \
 	for sample in sample_files]
 
-# deeptools bigwig
 BIGWIG_OUTPUT = ['bigwig/' + sample + '.bw'  \
 	for sample in sample_files]
 
+RLE_OUTPUT = ['bigwig_rle/log/' + sample + '_wig_matrices.done'  \
+	for sample in sample_files]
+
 localrules: all, print_quants  
-#print(sample_run_dict)
 
-
-# Gather base outputs needed in all scenarios
 TARGETS = [
 	'counts/gene_counts.csv.gz',
 	'salmon_quant_output.tsv',
 	'multiqc/multiqc_report.html'
 ]
 
-# Add kinship targets if requested
 if config.get('kinship'):
 	TARGETS.append('kinship/kinship_scores.kin0')
 	TARGETS.append('STAR_output.tsv')
 
-# Add BigWig targets if requested
 if config.get('bigwig'):
 	TARGETS.extend(BIGWIG_OUTPUT)
+	TARGETS.extend(RLE_OUTPUT)
 
-# Handle the STAR BAM retention logic
 if config.get('star'):
 	TARGETS.append('STAR_output.tsv')
-	# Overriding the temp() tag in STAR_align
 	TARGETS.extend(STAR_QUANT_OUTPUT)
 
 rule all:
 	input:
 		list(set(TARGETS)) 
 
-
-# Checkpoint rule to process samples in batches.
-# Snakemake will ensure the inputs for one batch are created before moving to the next,
-# managing resource usage. The output is a simple flag file to signal completion.
-def get_batch_salmon_files(wildcards):
-	samples = sample_batches[int(wildcards.batch)]
-	return expand('salmon_quant/{sample}/quant.sf', sample=samples)
-
-def get_batch_star_files(wildcards):
-	if config.get('star'):
-		samples = sample_batches[int(wildcards.batch)]
-		return expand('STAR_align/{sample}/{sample}_aligned.sortedByCoord.out.bam', sample=samples)
-	return []
-
-def get_batch_fastqc_files(wildcards):
-	samples = sample_batches[int(wildcards.batch)]
-	return expand('fastqc/{sample}.done', sample=samples)
-
-def get_batch_bigwig_files(wildcards):
-	if config.get('bigwig'):
-		samples = sample_batches[int(wildcards.batch)]
-		return expand('bigwig/{sample}.bw', sample=samples)
-	return []
-
-def get_batch_vcf_files(wildcards):
-	if config.get('kinship'):
-		samples = sample_batches[int(wildcards.batch)]
-		return expand('gatk_calls/{sample}_filtered.vcf.gz', sample=samples)
-	return []
-
-# Use a standard rule to bundle batch requirements
-rule process_batch:
-	input:
-		fastqc=get_batch_fastqc_files,
-		salmon=get_batch_salmon_files,
-		star=get_batch_star_files,
-		bigwig=get_batch_bigwig_files,
-		vcf=get_batch_vcf_files
-	output:
-		touch("batch_complete/{batch}.done")
-
 rule aggregate_fq:
-	# merge run level files to the sample level
 	input:
 		lambda wildcards: expand(fq_dir + '/{run}{{suffix}}', run = sample_run_dict[wildcards.sample])
 	output:
@@ -188,26 +113,26 @@ rule aggregate_fq:
 
 rule trim_fastq_se:
 	input:
-		fq = fq_dir + '/{sample}' + config['fqS_suffix'],
-		prev_batch = wait_for_prev_batch
+		fq_dir + '/{sample}' + config['fqS_suffix']
 	output:
 		temp('fastq_trimmed/{sample}' + config['fqS_suffix']),
 	threads: 8
+	resources: disk="20GB"
 	conda: 'OGVFB_RNAseq.yml'
 	shell:
 		"""
-		fastp --thread {threads} -i {input.fq} -o {output}
+		fastp --thread {threads} -i {input} -o {output}
 		"""
 
 rule trim_fastq_pe:
 	input:
 		r1 = ancient(fq_dir + '/{sample}' + config['fq1_suffix']),
-		r2 = ancient(fq_dir + '/{sample}' + config['fq2_suffix']),
-		prev_batch = wait_for_prev_batch
+		r2 = ancient(fq_dir + '/{sample}' + config['fq2_suffix'])
 	output:
 		r1 = temp('fastq_trimmed/{sample}' + config['fq1_suffix']),
 		r2 = temp('fastq_trimmed/{sample}' + config['fq2_suffix']),
 	threads: 8
+	resources: disk="20GB"
 	conda: 'OGVFB_RNAseq.yml'
 	shell:
 		"""
@@ -271,7 +196,7 @@ rule STAR_index:
 			--limitGenomeGenerateRAM=140090479317
 		rm tmp_fasta
 		rm tmp_gtf
- 		"""
+		"""
 
 rule salmon_quant:
 	input:
@@ -305,6 +230,7 @@ rule STAR_align:
 		scratch = '/lscratch/$SLURM_JOB_ID/STAR_align__{sample}/',
 		out = 'STAR_align/{sample}/',
 	threads: 1
+	resources: disk="20GB"
 	shell:
 		"""
 		mkdir -p {params.out}
@@ -330,7 +256,7 @@ rule deeptools_bamCoverage:
 	output:
 		bw = 'bigwig/{sample}.bw'
 	threads: 8
-	conda: 'OGVFB.deeptools.20260427.yml'
+	conda: 'OGVFB.deeptools.20260501.yml'
 	shell:
 		"""
 		mkdir -p bigwig
@@ -340,10 +266,27 @@ rule deeptools_bamCoverage:
 			-p {threads}
 		"""
 
+rule bigwig_to_rle_counts:
+	# run length encode compress counts coverage by gene
+	input:
+		bw = 'bigwig/{sample}.bw',
+		gtf = config['annotation_path'] + config['gtf']
+	output:
+		touch("bigwig_rle/log/{sample}_wig_matrices.done")
+	params: 
+		rscript = config['bigwig_rle_script'],
+		out_dir = 'bigwig_rle'
+	conda: 'OGVFB.deeptools.20260501.yml'
+	shell:
+		"""
+		mkdir -p bigwig_rle/log/
+
+		Rscript {params.rscript} {input.bw} {input.gtf} {params.out_dir}
+		"""
+
 rule print_SALMON_quants:
 	input:
-		quants=SALMON_QUANT_OUTPUT,
-		wait_for_batches=expand("batch_complete/{batch}.done", batch=sample_batches.keys())
+		quants=SALMON_QUANT_OUTPUT
 	output:
 		'salmon_quant_output.tsv'
 	run:
@@ -352,8 +295,7 @@ rule print_SALMON_quants:
 
 rule print_STAR_quants:
 	input:
-		quants=STAR_QUANT_OUTPUT,
-		wait_for_batches=expand("batch_complete/{batch}.done", batch=sample_batches.keys())
+		quants=STAR_QUANT_OUTPUT
 	output:
 		'STAR_output.tsv'
 	run:
@@ -362,8 +304,7 @@ rule print_STAR_quants:
 
 rule make_counts:
 	input:
-		quants=SALMON_QUANT_OUTPUT,
-		wait_for_batches=expand("batch_complete/{batch}.done", batch=sample_batches.keys())
+		quants=SALMON_QUANT_OUTPUT
 	output:
 		'counts/gene_counts.csv.gz'
 	params: config['make_counts_script']
@@ -374,8 +315,6 @@ rule make_counts:
 		Rscript {params} {input.quants}
 		"""
 
-
-# fastqc / multiqc stats
 rule fastqc:
 	input:
 		lambda wildcards: return_fq(wildcards.sample)
@@ -393,11 +332,11 @@ rule fastqc:
 
 rule multiqc:
 	input:
-		wait_for_batches=expand("batch_complete/{batch}.done", batch=sample_batches.keys())
+		fastqc=FASTQC_OUTPUT,
+		salmon=SALMON_QUANT_OUTPUT
 	output:
 		"multiqc/multiqc_report.html"
 	params:
-		# Directories to scan: fastqc, STAR alignment logs, and Salmon logs
 		search_dirs = "fastqc/ STAR_align/ salmon_quant/",
 		outdir = "multiqc/"
 	conda: 'OGVFB_RNAseq.yml' 
@@ -405,8 +344,9 @@ rule multiqc:
 		"""
 		multiqc {params.search_dirs} -o {params.outdir} -n multiqc_report.html
 		"""
-
-# genotype calling (check kinship scores)
+#############################
+# genotype for kinship check
+#############################
 rule index_reference:
 	input:
 		fasta = config['annotation_path'] + config['genome']
@@ -435,33 +375,27 @@ rule gatk_genotype_sample:
 		"""
 		mkdir -p {params.tmp}
 		
-		# 1. Add Generic Read Groups (Required for GATK)
 		gatk AddOrReplaceReadGroups \
 			-I {input.bam} -O {params.tmp}/rg.bam \
 			-RGID {wildcards.sample} -RGLB lib1 -RGPL ILLUMINA -RGPU unit1 -RGSM {wildcards.sample}
 			
-		# 2. Mark Duplicates
 		gatk MarkDuplicates \
 			-I {params.tmp}/rg.bam -O {params.tmp}/marked.bam \
 			-M {params.tmp}/metrics.txt
 			
-		# 3. SplitNCigarReads (handle introns)
 		gatk SplitNCigarReads \
 			-R {input.ref} -I {params.tmp}/marked.bam -O {params.tmp}/split.bam
 			
-		# 4. HaplotypeCaller
 		gatk HaplotypeCaller \
 			-R {input.ref} -I {params.tmp}/split.bam -O {params.tmp}/raw.vcf.gz \
 			--dont-use-soft-clipped-bases -standard-min-confidence-threshold-for-calling 20.0
 			
-		# 5. VariantFiltration (Hard filters for kinship)
 		gatk VariantFiltration \
 			-R {input.ref} -V {params.tmp}/raw.vcf.gz -O {output.vcf} \
 			--cluster-window-size 35 --cluster-size 3 \
 			--filter-name "FS" --filter-expression "FS > 30.0" \
 			--filter-name "QD" --filter-expression "QD < 2.0"
 			
-		# Cleanup large intermediate BAMs
 		rm -rf {params.tmp}
 		"""
 
@@ -473,20 +407,15 @@ rule plink_kinship:
 	conda: 'OGVFB.kinship.20260427.yml'
 	shell:
 		"""
-		# Merge individual VCFs (using bcftools or gatk)
 		bcftools merge {input.vcfs} -Oz -o kinship/merged_raw.vcf.gz
 		
-		# Filter for SNPs only and remove Sex Chromosomes (assuming chrX, chrY or X, Y)
-		# We also filter for biallelic SNPs which are best for kinship
 		bcftools view kinship/merged_raw.vcf.gz \
 			--types snps \
 			--min-alleles 2 --max-alleles 2 \
 			--targets ^chrX,chrY,X,Y \
 			-Oz -o kinship/merged_filtered.vcf.gz
 			
-		# Run PLINK2 Kinship
 		plink2 --vcf kinship/merged_filtered.vcf.gz \
 			--make-king-table \
 			--out kinship/kinship_scores
-			
 		"""
