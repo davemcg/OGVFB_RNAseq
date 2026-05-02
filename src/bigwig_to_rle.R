@@ -66,8 +66,16 @@ for (i in seq_along(genes_gr)) {
       # KEEP ONLY ROWS THAT ARE DIFFERENT FROM THE PREVIOUS ROW
       # fill = -1 ensures the very first row is always evaluated and kept
 	  # | .I == .N ensures the LAST value is always printed
-	  dt_long <- dt_long[count != shift(count, fill = -1) | .I == .N]      
-      gene_dir <- file.path(out_dir, gene_name)
+      # 1. Flag rows where the value changes
+      keep_rows <- dt_long$count != data.table::shift(dt_long$count, fill = -1)
+      
+      # 2. Explicitly force the very last row to be kept
+      keep_rows[length(keep_rows)] <- TRUE
+      
+      # 3. Subset
+      dt_long <- dt_long[keep_rows]
+
+	  gene_dir <- file.path(out_dir, gene_name)
       
       # Safely create directory if it doesn't exist
       if (!dir.exists(gene_dir)) {
