@@ -74,7 +74,7 @@ FASTQC_OUTPUT = ['fastqc/' + sample + '.done' \
 BIGWIG_OUTPUT = ['bigwig/' + sample + '.bw'  \
 	for sample in sample_files]
 
-RLE_OUTPUT = ['bigwig_rle/log/' + sample + '_wig_matrices.done'  \
+RLE_OUTPUT = ['gene_rle/' + sample + '.tsv.gz'  \
 	for sample in sample_files]
 
 localrules: all, print_quants  
@@ -272,14 +272,14 @@ rule bigwig_to_rle_counts:
 		bw = 'bigwig/{sample}.bw',
 		gtf = config['annotation_path'] + config['gtf']
 	output:
-		touch("bigwig_rle/log/{sample}_wig_matrices.done")
+		"gene_rle/{sample}.tsv.gz"
 	params: 
 		rscript = config['bigwig_rle_script'],
-		out_dir = 'bigwig_rle'
+		out_dir = 'gene_rle'
 	conda: 'OGVFB.deeptools.20260501.yml'
 	shell:
 		"""
-		mkdir -p bigwig_rle/log/
+		mkdir -p gene_rle
 
 		Rscript {params.rscript} {input.bw} {input.gtf} {params.out_dir}
 		"""
