@@ -37,19 +37,6 @@ rule call:
 			--localmem=30 
 		"""
 
-rule seacells:
-	input:
-		'{tag}/outs/cloupe.cloupe'
-	params:
-		h5 = '{tag}/outs/filtered_feature_bc_matrix.h5'
-	output:
-		'seacells/{tag}.obs.csv.gz',
-		'seacells/{tag}.seacell_aggr.csv.gz'
-	shell:
-		"""
-		mkdir -p seacells
-		/data/mcgaugheyd/conda/envs/seacells/bin/python /home/mcgaugheyd/git/OGVFB_RNAseq/src/seacell_maker.py {params.h5} {wildcards.tag} {output}
-		"""
 
 rule solo:
 	input:
@@ -107,22 +94,98 @@ rule aggr_solo:
 		Rscript {git_dir}/src/solo_aggr.R {input.sample_info} {output}
 		"""
 
-rule quick_process:
-	input:
-		sample_info = config['sample_info'],
-		cloupe = 'aggr/outs/count/cloupe.cloupe',
-		solo = 'aggr/solo.csv.gz'
-	output:
-		'data/bioc_dims{dims}_hvg{hvg}_subset{subsets}.obj.Rdata'
-	threads: 4
-	shell:
-		"""
-		module load R/4.2
-		Rscript {git_dir}/src/scRNA_quick_start.R \
-			{input.sample_info} \
-			{wildcards.hvg} \
-			{wildcards.dims} \
-			{output} \
-			{wildcards.subsets}
-		"""
+if config['cellbender']:
+	print("\n\nRunning workflow with decontamination\n\n")
+	rule decontaminate:
+		input:
+			'{tag}/outs/cloupe.cloupe'
+		params:
+			h5_in = 'raw_feature_bc_matrix.h5',
+			h5_out_dir = '{tag}/outs/'
+		output:
+			'{tag}/outs/cellbender_filtered.h5'
+		shell:
+			"""
+			module load cellbender/0.3.0
+			cd {params.h5_out_dir}
+			cellbender remove-background \
+				--input {params.h5_in} \
+				--output cellbender \
+				--cuda
+			rm cel*_posterior.h5
+			rm ckpt.tar.gz
+			"""
 
+	rule seacells:
+		input:
+			'{tag}/outs/cloupe.cloupe',
+			'{tag}/outs/cellbender_filtered.h5'
+		params:
+			h5 = '{tag}/outs/cellbender_filtered.h5'
+		output:
+			'seacells/{tag}.obs.csv.gz',
+			'seacells/{tag}.seacell_aggr.csv.gz'
+		shell:
+			"""
+			mkdir -p seacells
+			/data/mcgaugheyd/conda/envs/seacells/bin/python /home/mcgaugheyd/git/OGVFB_RNAseq/src/seacell_maker.py {params.h5} {wildcards.tag} {output}
+			"""
+
+	rule quick_process:
+		input:
+			sample_info = config['sample_info'],
+			cloupe = 'aggr/outs/count/cloupe.cloupe',
+			solo = 'aggr/solo.csv.gz',
+			cellbender = expand('{tag}/outs/cellbender_filtered.h5',  tag = config['samples'])
+		output:
+			'data/bioc_dims{dims}_hvg{hvg}_subset{subsets}.obj.Rdata'
+		threads: 4
+		shell:
+			"""
+			module load R/4.2
+			Rscript {git_dir}/src/scRNA_quick_start.R \
+				{input.sample_info} \
+				{wildcards.hvg} \
+				{wildcards.dims} \
+				{output} \
+				TRUE \
+				{wildcards.subsets}
+			"""
+
+else:
+	print("\n\nRunning workflow without decontamination\n\n")
+	rule seacells:
+		input:
+			'{tag}/outs/cloupe.cloupe'
+		params:
+			h5 = '{tag}/outs/filtered_feature_bc_matrix.h5'
+		output:
+			'seacells/{tag}.obs.csv.gz',
+			'seacells/{tag}.seacell_aggr.csv.gz'
+		shell:
+			"""
+			mkdir -p seacells
+			/data/mcgaugheyd/conda/envs/seacells/bin/python /home/mcgaugheyd/git/OGVFB_RNAseq/src/seacell_maker.py {params.h5} {wildcards.tag} {output}
+			"""
+	
+	rule quick_process:
+		input:
+			sample_info = config['sample_info'],
+			cloupe = 'aggr/outs/count/cloupe.cloupe',
+			solo = 'aggr/solo.csv.gz'
+		output:
+			'data/bioc_dims{dims}_hvg{hvg}_subset{subsets}.obj.Rdata'
+		threads: 4
+		shell:
+			"""
+			module load R/4.2
+			Rscript {git_dir}/src/scRNA_quick_start.R \
+				{input.sample_info} \
+				{wildcards.hvg} \
+				{wildcards.dims} \
+				{output} \
+				FALSE \
+				{wildcards.subsets}
+			"""
+
+		
