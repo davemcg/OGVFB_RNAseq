@@ -20,7 +20,7 @@ sbcmd="sbatch --cpus-per-task={threads} \
 {cluster.extra}"
 
 
-snakemake -s /home/mcgaugheyd/git/OGVFB_RNAseq/Snakefile_EiaD_batch \
+snakemake -s /home/mcgaugheyd/git/OGVFB_RNAseq/Snakefile \
   --scheduler greedy \
   --rerun-triggers mtime \
   -pr --local-cores 2 --jobs 501 \
