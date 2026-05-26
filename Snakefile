@@ -341,7 +341,7 @@ rule make_counts:
 	threads: 20
 	shell:
 		"""
-		Rscript {params} {input.quants}
+		Rscript {params}
 		"""
 
 rule fastqc:
