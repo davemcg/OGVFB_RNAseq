@@ -251,6 +251,7 @@ rule salmon_quant:
 		input_command = lambda wildcards: salmon_input_maker(wildcards.sample),
 		dir = 'salmon_quant/{sample}',
 		index_dir = get_salmon_index
+	priority: 100
 	threads: 16
 	conda: 'OGVFB_RNAseq.yml'
 	shell:
@@ -277,6 +278,7 @@ rule STAR_align:
 		index_dir = get_star_index
 	threads: 8
 	resources: disk="20GB"
+	priority: 100
 	shell:
 		"""
 		mkdir -p {params.out}
@@ -302,6 +304,7 @@ rule deeptools_bamCoverage:
 	output:
 		bw = 'bigwig/{sample}.bw'
 	threads: 8
+	priority: 200
 	conda: 'OGVFB.deeptools.20260501.yml'
 	shell:
 		"""
@@ -352,6 +355,7 @@ rule fastqc:
 	params:
 		outdir = 'fastqc/'
 	threads: 2 
+	priority: 100
 	conda: 'OGVFB_RNAseq.yml' 
 	shell:
 		"""
