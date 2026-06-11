@@ -40,8 +40,8 @@ salmon_anno2 <- salmon_anno %>%
 salmon_tx2gene <- salmon_anno2 %>% dplyr::select(Name, gene_id)
 
 # import
-txi <- tximport(files, type = "salmon", tx2gene = salmon_tx2gene)
-txi_tx <- tximport(files, type = "salmon", tx2gene = salmon_tx2gene, txOut = TRUE)
+txi <- tximport(files, type = "salmon", tx2gene = salmon_tx2gene, dropInfReps = TRUE)
+txi_tx <- tximport(files, type = "salmon", tx2gene = salmon_tx2gene, txOut = TRUE, dropInfReps = TRUE)
 # extract counts
 puller <- function(txi_object, slot = 'counts', ncolnames = gsub('salmon_quant|\\/|quant\\.sf', '', files)){
 	out <- txi_object[[slot]]
