@@ -32,5 +32,25 @@
 		"mem" : "48g",
 		"partition" : "norm",
 		"extra" : " --gres=lscratch:140"
+	},
+	"trim_fastq_pe" :
+	{
+		"mem" : "24g"
+	},
+	"make_counts" :
+	{
+		"mem" : "360g"
+	},
+	"gatk_genotype_sample" :
+	{
+		"time" : "12:00:00",
+		"mem" : "96g",
+		"partition" : "norm",
+		"extra" : " --gres=lscratch:140"
+	},
+	"multiqc" :
+	{
+		"time" : "8:00:00",
+		"mem" : "96g"
 	}
 }
