@@ -126,6 +126,7 @@ rule aggregate_fq:
 		lambda wildcards: expand(fq_dir + '/{run}{{suffix}}', run = sample_run_dict[wildcards.sample])
 	output:
 		temp(fq_dir + '/{sample}{suffix}')
+	resources: disk="20GB", parallel=1
 	shell:
 		"""
 		cat {input} > {output}
@@ -137,7 +138,7 @@ rule trim_fastq_se:
 	output:
 		temp('fastq_trimmed/{sample}' + config['fqS_suffix']),
 	threads: 8
-	resources: disk="20GB"
+	resources: disk="20GB", parallel=1 
 	conda: 'OGVFB_RNAseq.yml'
 	shell:
 		"""
@@ -152,7 +153,7 @@ rule trim_fastq_pe:
 		r1 = temp('fastq_trimmed/{sample}' + config['fq1_suffix']),
 		r2 = temp('fastq_trimmed/{sample}' + config['fq2_suffix']),
 	threads: 8
-	resources: disk="20GB"
+	resources: disk="20GB", parallel=1
 	conda: 'OGVFB_RNAseq.yml'
 	shell:
 		"""
@@ -190,6 +191,7 @@ rule salmon_index:
 		transcripts = lambda w: config['references'][w.organism]['transcripts'],
 		index_name = "salmon_index_{organism}"
 	threads: 16
+	priority: 500
 	conda: 'OGVFB_RNAseq.yml'
 	shell:
 		"""
@@ -218,6 +220,7 @@ rule STAR_index:
 		genome = lambda w: config['references'][w.organism]['genome'],
 		gtf = lambda w: config['references'][w.organism]['gtf']
 	threads: 16
+	priority: 500
 	conda: 'OGVFB_RNAseq.yml'
 	shell:
 		"""
@@ -252,7 +255,6 @@ rule salmon_quant:
 		dir = 'salmon_quant/{sample}',
 		index_dir = get_salmon_index
 	priority: 100
-	threads: 16
 	conda: 'OGVFB_RNAseq.yml'
 	shell:
 		"""
