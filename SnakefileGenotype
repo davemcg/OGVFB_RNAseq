@@ -80,6 +80,34 @@ def get_gtf(wildcards):
 	gtf = config['references'][organism]['gtf']
 	ann_path = config['references'][organism]['annotation_path'].rstrip('/')
 	return f"{ann_path}/{gtf}"
+
+def get_kinship_organism():
+	organisms = set(sample_organism_dict[s] for s in sample_files)
+	if len(organisms) != 1:
+		sys.exit(
+			"\n****************\n"
+			"Kinship requires all samples to share a single organism/reference.\n"
+			"Found: " + ", ".join(sorted(organisms)) + "\n"
+			"***************\n"
+		)
+	return organisms.pop()
+
+
+def kinship_ref_paths():
+	org = get_kinship_organism()
+	ann = config['references'][org]['annotation_path'].rstrip('/')
+	gz = config['references'][org]['genome']                 # e.g. genome.fa.gz (plain gzip from wget)
+	fa = re.sub(r'\.gz$', '', gz)                            # genome.fa
+	base = re.sub(r'\.fa$|\.fasta$', '', fa)                 # genome
+	return {
+		'org':  org,
+		'ann':  ann,
+		'gz':   f"{ann}/{gz}",
+		'fa':   f"{ann}/{fa}",
+		'fai':  f"{ann}/{fa}.fai",
+		'dict': f"{ann}/{base}.dict",
+		'flag': f"flags/download_{org}.done",
+	}
 # -----------------------------------------------------
 
 suffixes = [config['fq1_suffix'], config['fq2_suffix'], config['fqS_suffix']]
@@ -120,6 +148,10 @@ if config.get('star'):
 if config.get('kinship'):
     TARGETS.append('kinship/kinship_scores.kin0')
     TARGETS.append('STAR_output.tsv')
+
+if config.get('hipstr'):
+     TARGETS.append('hipstr/str_calls.vcf.gz')
+     TARGETS.append('STAR_output.tsv')
 
 rule all:
 	input:
@@ -385,80 +417,248 @@ rule multiqc:
 		"""
 
 
-
-
 #############################
-# genotype for kinship check
+# genotype: kinship + STR (HipSTR)
 #############################
-rule index_reference:
-    input:
-        fasta = config['annotation_path'] + config['genome']
-    output:
-        fai = config['annotation_path'] + config['genome'] + ".fai",
-        dict_file = config['annotation_path'] + re.sub(r'\.fa\.gz$|\.fasta\.gz$', '.dict', config['genome'])
-    conda: 'OGVFB_RNAseq.yml'
-    shell:
-        """
-        samtools faidx {input.fasta}
-        gatk CreateSequenceDictionary -R {input.fasta} -O {output.dict_file}
-        """
+# TARGETS additions (keep in your existing TARGETS block):
+#
+# if config.get('kinship'):
+#     TARGETS.append('kinship/kinship_scores.kin0')
+#     TARGETS.append('STAR_output.tsv')        # forces STAR bams to exist
+#
+# if config.get('hipstr'):
+#     TARGETS.append('hipstr/str_calls.vcf.gz')
+#     TARGETS.append('STAR_output.tsv')
 
-rule gatk_genotype_sample:
-    input:
-        bam = 'STAR_align/{sample}/{sample}_aligned.sortedByCoord.out.bam',
-        ref = config['annotation_path'] + config['genome'],
-        fai = config['annotation_path'] + config['genome'] + ".fai",
-        dict_file = config['annotation_path'] + re.sub(r'\.fa\.gz$|\.fasta\.gz$', '.dict', config['genome'])
-    output:
-        vcf = 'gatk_calls/{sample}_filtered.vcf.gz'
-    params:
-        tmp = '/lscratch/$SLURM_JOB_ID/gatk_{sample}'
-    conda: 'OGVFB.kinship.20260427.yml'
-    shell:
-        """
-        mkdir -p {params.tmp}
+def get_genotyping_organism():
+	"""Kinship merges genotypes and HipSTR uses one --fasta, so all samples must
+	share ONE reference (same coordinate system). Refuse mixed-organism runs."""
+	organisms = set(sample_organism_dict[s] for s in sample_files)
+	if len(organisms) != 1:
+		sys.exit(
+			"\n****************\n"
+			"kinship/hipstr require all samples to share a single organism/reference.\n"
+			"Found: " + ", ".join(sorted(organisms)) + "\n"
+			"***************\n"
+		)
+	return organisms.pop()
 
-        gatk AddOrReplaceReadGroups \
-            -I {input.bam} -O {params.tmp}/rg.bam \
-            -RGID {wildcards.sample} -RGLB lib1 -RGPL ILLUMINA -RGPU unit1 -RGSM {wildcards.sample}
 
-        gatk MarkDuplicates \
-            -I {params.tmp}/rg.bam -O {params.tmp}/marked.bam \
-            -M {params.tmp}/metrics.txt
+def genotyping_ref_paths():
+	"""Resolve reference paths from the per-organism config schema.
+	Produces an UNCOMPRESSED fasta path (GATK/samtools/HipSTR cannot use plain .gz)."""
+	org = get_genotyping_organism()
+	ann = config['references'][org]['annotation_path'].rstrip('/')
+	gz = config['references'][org]['genome']                 # e.g. genome.fa.gz (plain gzip)
+	fa = re.sub(r'\.gz$', '', gz)                            # genome.fa
+	base = re.sub(r'\.fa$|\.fasta$', '', fa)                 # genome
 
-        gatk SplitNCigarReads \
-            -R {input.ref} -I {params.tmp}/marked.bam -O {params.tmp}/split.bam
+	# STR region BED is only required when HipSTR is enabled.
+	str_bed = None
+	if config.get('hipstr'):
+		str_bed = config['references'][org].get('str_regions')
+		if not str_bed:
+			sys.exit(
+				"\n****************\n"
+				"hipstr enabled but config['references']['" + org + "']['str_regions'] is not set.\n"
+				"Provide a path to a HipSTR regions BED.\n"
+				"***************\n"
+			)
 
-        gatk HaplotypeCaller \
-            -R {input.ref} -I {params.tmp}/split.bam -O {params.tmp}/raw.vcf.gz \
-            --dont-use-soft-clipped-bases -standard-min-confidence-threshold-for-calling 20.0
+	return {
+		'org':     org,
+		'ann':     ann,
+		'gz':      f"{ann}/{gz}",
+		'fa':      f"{ann}/{fa}",
+		'fai':     f"{ann}/{fa}.fai",
+		'dict':    f"{ann}/{base}.dict",
+		'flag':    f"flags/download_{org}.done",
+		'str_bed': str_bed,   # path as provided (absolute or relative to workdir)
+	}
 
-        gatk VariantFiltration \
-            -R {input.ref} -V {params.tmp}/raw.vcf.gz -O {output.vcf} \
-            --cluster-window-size 35 --cluster-size 3 \
-            --filter-name "FS" --filter-expression "FS > 30.0" \
-            --filter-name "QD" --filter-expression "QD < 2.0"
 
-        rm -rf {params.tmp}
-        """
+# Shared reference + split-bam rules are needed by EITHER kinship or hipstr.
+if config.get('kinship') or config.get('hipstr'):
 
-rule plink_kinship:
-    input:
-        vcfs = expand('gatk_calls/{sample}_filtered.vcf.gz', sample=sample_files)
-    output:
-        table = 'kinship/kinship_scores.kin0'
-    conda: 'OGVFB.kinship.20260427.yml'
-    shell:
-        """
-        bcftools merge {input.vcfs} -Oz -o kinship/merged_raw.vcf.gz
+	GT = genotyping_ref_paths()
 
-        bcftools view kinship/merged_raw.vcf.gz \
-            --types snps \
-            --min-alleles 2 --max-alleles 2 \
-            --targets ^chrX,chrY,X,Y \
-            -Oz -o kinship/merged_filtered.vcf.gz
+	rule decompress_reference:
+		input:
+			flag = GT['flag']
+		output:
+			fa = GT['fa']
+		params:
+			gz = GT['gz']
+		shell:
+			"""
+			gunzip -c {params.gz} > {output.fa}
+			"""
 
-        plink2 --vcf kinship/merged_filtered.vcf.gz \
-            --make-king-table \
-            --out kinship/kinship_scores
-        """
+	rule index_reference:
+		input:
+			fasta = GT['fa']
+		output:
+			fai = GT['fai'],
+			dict_file = GT['dict']
+		conda: 'OGVFB.kinship.20260427.yml'
+		shell:
+			"""
+			samtools faidx {input.fasta}
+			gatk CreateSequenceDictionary -R {input.fasta} -O {output.dict_file}
+			"""
+
+	# Shared RNA-seq preprocessing. Outputs the SplitNCigarReads bam (+ index),
+	# consumed by HaplotypeCaller and HipSTR. temp() so it's cleaned once all
+	# enabled consumers finish. bai is explicit so STAR's temp index survives.
+	rule gatk_split_ncigar:
+		input:
+			bam = 'STAR_align/{sample}/{sample}_aligned.sortedByCoord.out.bam',
+			bai = 'STAR_align/{sample}/{sample}_aligned.sortedByCoord.out.bam.bai',
+			ref = GT['fa'],
+			fai = GT['fai'],
+			dict_file = GT['dict']
+		output:
+			bam = temp('gatk_split/{sample}_split.bam'),
+			bai = temp('gatk_split/{sample}_split.bam.bai')
+		params:
+			tmp = '/lscratch/$SLURM_JOB_ID/gatk_split_{sample}'
+		conda: 'OGVFB.kinship.20260427.yml'
+		shell:
+			"""
+			mkdir -p {params.tmp}
+
+			gatk AddOrReplaceReadGroups \
+				-I {input.bam} -O {params.tmp}/rg.bam \
+				-RGID {wildcards.sample} -RGLB lib1 -RGPL ILLUMINA -RGPU unit1 -RGSM {wildcards.sample}
+
+			gatk MarkDuplicates \
+				-I {params.tmp}/rg.bam -O {params.tmp}/marked.bam \
+				-M {params.tmp}/metrics.txt
+
+			gatk SplitNCigarReads \
+				-R {input.ref} -I {params.tmp}/marked.bam -O {output.bam}
+
+			samtools index {output.bam}
+
+			rm -rf {params.tmp}
+			"""
+
+
+# ---- kinship branch ----
+if config.get('kinship'):
+
+	rule gatk_haplotypecaller_gvcf:
+		input:
+			bam = 'gatk_split/{sample}_split.bam',
+			bai = 'gatk_split/{sample}_split.bam.bai',
+			ref = GT['fa'],
+			fai = GT['fai'],
+			dict_file = GT['dict']
+		output:
+			gvcf = 'gatk_calls/{sample}.g.vcf.gz'
+		conda: 'OGVFB.kinship.20260427.yml'
+		shell:
+			"""
+			gatk HaplotypeCaller \
+				-R {input.ref} -I {input.bam} -O {output.gvcf} \
+				-ERC GVCF \
+				--dont-use-soft-clipped-bases \
+				-standard-min-confidence-threshold-for-calling 20.0
+			"""
+
+	rule gatk_joint_genotype:
+		input:
+			gvcfs = expand('gatk_calls/{sample}.g.vcf.gz', sample=sample_files),
+			ref = GT['fa'],
+			fai = GT['fai'],
+			dict_file = GT['dict']
+		output:
+			vcf = 'gatk_calls/joint_raw.vcf.gz'
+		params:
+			tmp = '/lscratch/$SLURM_JOB_ID/gatk_joint',
+			variant_args = lambda w, input: ' '.join(f'-V {g}' for g in input.gvcfs)
+		conda: 'OGVFB.kinship.20260427.yml'
+		shell:
+			"""
+			mkdir -p {params.tmp}
+
+			gatk CombineGVCFs \
+				-R {input.ref} {params.variant_args} \
+				-O {params.tmp}/combined.g.vcf.gz
+
+			gatk GenotypeGVCFs \
+				-R {input.ref} -V {params.tmp}/combined.g.vcf.gz \
+				-O {output.vcf}
+
+			rm -rf {params.tmp}
+			"""
+
+	rule gatk_variant_filtration:
+		input:
+			vcf = 'gatk_calls/joint_raw.vcf.gz',
+			ref = GT['fa'],
+			fai = GT['fai'],
+			dict_file = GT['dict']
+		output:
+			vcf = 'gatk_calls/joint_filtered.vcf.gz'
+		conda: 'OGVFB.kinship.20260427.yml'
+		shell:
+			"""
+			gatk VariantFiltration \
+				-R {input.ref} -V {input.vcf} -O {output.vcf} \
+				--cluster-window-size 35 --cluster-size 3 \
+				--filter-name "FS" --filter-expression "FS > 30.0" \
+				--filter-name "QD" --filter-expression "QD < 2.0"
+			"""
+
+	rule plink_kinship:
+		input:
+			vcf = 'gatk_calls/joint_filtered.vcf.gz'
+		output:
+			table = 'kinship/kinship_scores.kin0'
+		conda: 'OGVFB.kinship.20260427.yml'
+		shell:
+			"""
+			bcftools view {input.vcf} \
+				-f PASS \
+				--types snps \
+				--min-alleles 2 --max-alleles 2 \
+				--targets ^chrX,chrY,X,Y \
+				-Oz -o kinship/merged_filtered.vcf.gz
+
+			plink2 --vcf kinship/merged_filtered.vcf.gz \
+				--make-king-table \
+				--out kinship/kinship_scores
+			"""
+
+
+# ---- HipSTR STR-genotyping branch (optional) ----
+if config.get('hipstr'):
+
+	# Joint STR genotyping across all samples in one call. HipSTR uses the RG SM
+	# tag (set in gatk_split_ncigar) to separate samples, and requires sorted +
+	# indexed bams and a .fai-indexed uncompressed reference.
+	rule hipstr_genotype:
+		input:
+			bams = expand('gatk_split/{sample}_split.bam', sample=sample_files),
+			bais = expand('gatk_split/{sample}_split.bam.bai', sample=sample_files),
+			ref = GT['fa'],
+			fai = GT['fai'],
+			regions = GT['str_bed']
+		output:
+			vcf = 'hipstr/str_calls.vcf.gz'
+		params:
+			bam_list = lambda w, input: ','.join(input.bams),
+			extra = config.get('hipstr_extra', '')   # e.g. '--min-reads 25' for few samples
+		shell:
+			"""
+			module load hipstr/0.7
+			mkdir -p hipstr
+			HipSTR \
+				--bams {params.bam_list} \
+				--fasta {input.ref} \
+				--regions {input.regions} \
+				--str-vcf {output.vcf} \
+				--log hipstr/hipstr.log \
+				{params.extra}
+			"""
