@@ -52,20 +52,47 @@ def read_cellbender_samples(ssheet):
     for i, row in ssheet.reset_index(drop=True).iterrows():
         sample_number = i + 1                      # 1-based, matches R loop index
         a = sc.read_10x_h5(row[mol_col])
+        # keep the ORIGINAL gene symbol before make_unique appends -1/-2 to duplicates
+        a.var["gene_symbol"] = a.var_names.astype(str)
         a.var_names_make_unique()
         a.obs["sample_number"] = sample_number
         a.obs["sample_id"] = str(row[id_col])
         # unique barcodes across samples: barcode + sample suffix
         a.obs_names = [f"{bc}-{sample_number}" for bc in a.obs_names]
         adatas.append(a)
-    full = ad.concat(adatas, join="outer", label=None, index_unique=None)
+    full = ad.concat(adatas, join="outer", label=None, index_unique=None,
+                     merge="same")   # merge="same" keeps .var columns (gene_ids) shared across samples; default drops them
     full.obs_names_make_unique()
+    # belt-and-suspenders: reattach full var annotation from the first sample, reindexed to
+    # the concatenated gene order, so gene_ids/symbols survive even if a later op strips .var
+    ref_var = adatas[0].var
+    full.var = ref_var.reindex(full.var_names)
     return full
 
 if cellbender_input:
     adata_full = read_cellbender_samples(ssheet)
 else:
     raise NotImplementedError("Only the CellBender branch was requested/implemented.")
+
+# ----------------------------------------------------------------------
+# Solo doublet scores (aggr/solo.csv.gz): columns barcode, solo_doublet, solo_score
+# barcodes are aggr-style 'BARCODE-N' where N is the sample index; this matches the
+# obs_names built above ('{barcode}-{sample_number}') IF aggr order == samplesheet order.
+# ----------------------------------------------------------------------
+solo = pd.read_csv("aggr/solo.csv.gz")
+solo["barcode"] = solo["barcode"].astype(str)
+solo = solo.set_index("barcode")
+
+# join onto obs by barcode; report match rate so a format/order mismatch is visible
+matched = adata_full.obs_names.isin(solo.index)
+print(f"Solo: matched {matched.sum()} / {adata_full.n_obs} cells "
+      f"({100*matched.mean():.1f}%) by barcode")
+adata_full.obs["solo_doublet"] = (
+    solo["solo_doublet"].reindex(adata_full.obs_names).fillna(False).astype(bool).values
+)
+adata_full.obs["solo_score"] = (
+    solo["solo_score"].reindex(adata_full.obs_names).astype(float).values
+)
 
 # Ensure raw integer counts are preserved before any normalization
 adata_full.layers["counts"] = adata_full.X.copy()
@@ -124,6 +151,9 @@ for s in obs["sample_number"].unique():
 
 # Hard cutoffs (matches R: sum < 500 OR detected < 200)
 discard |= (obs["total_counts"].values < 500) | (obs["n_genes_by_counts"].values < 200)
+
+# Solo-flagged doublets
+discard |= adata_full.obs["solo_doublet"].values
 
 adata_full.obs["discard"] = discard
 print(f"Discarding {discard.sum()} / {adata_full.n_obs} cells "
