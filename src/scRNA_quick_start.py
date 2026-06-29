@@ -52,17 +52,23 @@ def read_cellbender_samples(ssheet):
     for i, row in ssheet.reset_index(drop=True).iterrows():
         sample_number = i + 1                      # 1-based, matches R loop index
         a = sc.read_10x_h5(row[mol_col])
+        
         # keep the ORIGINAL gene symbol before make_unique appends -1/-2 to duplicates
         a.var["gene_symbol"] = a.var_names.astype(str)
         a.var_names_make_unique()
+        
         a.obs["sample_number"] = sample_number
         a.obs["sample_id"] = str(row[id_col])
-        # unique barcodes across samples: barcode + sample suffix
-        a.obs_names = [f"{bc}-{sample_number}" for bc in a.obs_names]
+        
+        # Strip the trailing '-1' from the raw barcode before adding the sample suffix
+        a.obs_names = a.obs_names.str.split('-').str[0] + f"-{sample_number}"
+        
         adatas.append(a)
+        
     full = ad.concat(adatas, join="outer", label=None, index_unique=None,
                      merge="same")   # merge="same" keeps .var columns (gene_ids) shared across samples; default drops them
     full.obs_names_make_unique()
+    
     # belt-and-suspenders: reattach full var annotation from the first sample, reindexed to
     # the concatenated gene order, so gene_ids/symbols survive even if a later op strips .var
     ref_var = adatas[0].var
@@ -114,7 +120,7 @@ adata_full.var["ribo"] = symbols.str.upper().str.match(r"^(RPS|RPL)")
 # Per-cell QC metrics (computed on GPU)
 # ----------------------------------------------------------------------
 rsc.get.anndata_to_GPU(adata_full)
-rsc.pp.calculate_qc_metrics(adata_full, qc_vars=["mt"])
+rsc.pp.calculate_qc_metrics(adata_full, qc_vars=["mt", "ribo"])
 # rsc stores: n_genes_by_counts, total_counts, pct_counts_mt
 rsc.get.anndata_to_CPU(adata_full)
 
@@ -147,10 +153,11 @@ for s in obs["sample_number"].unique():
     low_counts = is_outlier_mad(sub["total_counts"],          log=True,  lower=True,  upper=False)
     low_genes  = is_outlier_mad(sub["n_genes_by_counts"],     log=True,  lower=True,  upper=False)
     high_mito  = is_outlier_mad(sub["pct_counts_mt"],         log=False, lower=False, upper=True)
-    discard[m] = low_counts | low_genes | high_mito
+    high_ribo = is_outlier_mad(sub["pct_counts_ribo"],         log=False, lower=False, upper=True)
+    discard[m] = low_counts | low_genes | high_mito | high_ribo
 
-# Hard cutoffs (matches R: sum < 500 OR detected < 200)
-discard |= (obs["total_counts"].values < 500) | (obs["n_genes_by_counts"].values < 200)
+# Hard cutoffs
+discard |= (obs["total_counts"].values < 1000) | (obs["n_genes_by_counts"].values < 500) | (obs["pct_counts_mt"].values > 20) | (obs["pct_counts_ribo"].values > 20) 
 
 # Solo-flagged doublets
 discard |= adata_full.obs["solo_doublet"].values
@@ -185,6 +192,9 @@ def run_workflow(a, hvg_num, pca_num, subsets):
     )
     # Exclude mito/ribo from the HVG set fed to PCA (matches R behavior, done pre-PCA)
     a.var.loc[a.var["mt"] | a.var["ribo"], "highly_variable"] = False
+    
+    # save log norm before scaling
+    a.layers["lognormalized"] = a.X.copy()
 
     # PCA on HVGs, scaled (R used scale=TRUE on logcounts subset to HVGs)
     rsc.pp.scale(a, max_value=10, mask_obs=None)
@@ -210,7 +220,7 @@ def run_workflow(a, hvg_num, pca_num, subsets):
     # Stored under a dedicated .uns key so the later pairwise loop doesn't overwrite it.
     print("markers (one-vs-rest)")
     _rank_genes_groups(a, groupby="cluster", method="wilcoxon", tie_correct=True,
-                       key_added="rank_genes_groups")
+                       key_added="rank_genes_groups", layer="lognormalized")
     diff = sc.get.rank_genes_groups_df(a, group=None, key="rank_genes_groups")
     if "gene_ids" in a.var.columns:
         ens_map = dict(zip(a.var_names, a.var["gene_ids"]))
@@ -219,7 +229,7 @@ def run_workflow(a, hvg_num, pca_num, subsets):
 
     # Markers (all unordered pairs): cluster-vs-cluster contrasts.
     print("markers (all pairwise)")
-    diff_pairwise = pairwise_rank_genes(a, groupby="cluster", method="wilcoxon")
+    diff_pairwise = pairwise_rank_genes(a, groupby="cluster", method="wilcoxon", layer="lognormalized")
     if "gene_ids" in a.var.columns:
         diff_pairwise["ENSEMBL"] = diff_pairwise["names"].map(ens_map)
     diff_pairwise = diff_pairwise.rename(columns={"names": "SYMBOL"})
@@ -243,14 +253,14 @@ def _rank_genes_groups(a, **kwargs):
     fn = getattr(getattr(rsc, "tl", None), "rank_genes_groups", None)
     if fn is not None:
         # rsc requires data on GPU; transfer .X only for the test
-        rsc.get.anndata_to_GPU(a)
+        rsc.get.anndata_to_GPU(a, convert_all=True)
         fn(a, **kwargs)
-        rsc.get.anndata_to_CPU(a)
+        rsc.get.anndata_to_CPU(a, convert_all=True)
     else:
         sc.tl.rank_genes_groups(a, **kwargs)
 
 
-def pairwise_rank_genes(a, groupby="cluster", method="wilcoxon", tie_correct=True):
+def pairwise_rank_genes(a, groupby="cluster", method="wilcoxon", tie_correct=True, layer = "lognormalized"):
     """All unordered-pairs pairwise differential expression.
 
     Loops over each unordered cluster pair {A, B} once (A before B in category order)
@@ -273,10 +283,13 @@ def pairwise_rank_genes(a, groupby="cluster", method="wilcoxon", tie_correct=Tru
     frames = []
     try:
         for i in range(len(cats)):
-            for j in range(i + 1, len(cats)):     # unordered: only i < j
+            for j in range(len(cats)):  
+                if i == j:
+                    continue
+
                 A, B = cats[i], cats[j]
                 kw = dict(groupby=groupby, groups=[A], reference=B, method=method,
-                          key_added="rank_genes_groups_pairwise")
+                          key_added="rank_genes_groups_pairwise", layer=layer)
                 if method == "wilcoxon":
                     kw["tie_correct"] = tie_correct
                 if use_gpu:
