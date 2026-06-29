@@ -619,12 +619,12 @@ if config.get('kinship'):
 		conda: 'OGVFB.kinship.20260427.yml'
 		shell:
 			"""
-			bcftools view {input.vcf} \
-				-f PASS \
-				--types snps \
-				--min-alleles 2 --max-alleles 2 \
-				--targets ^chrX,chrY,X,Y \
-				-Oz -o kinship/merged_filtered.vcf.gz
+			# remove multiallelics and retain non-sex chr
+			# then reset depth < 10 to missing
+			bcftools view -f PASS -m2 -M2 -r $(echo chr{{1..22}} | tr ' ' ',') {input.vcf} -Ou | \
+				bcftools filter -S . \
+  					-e 'FMT/DP < 10 || FMT/DP == "."' \
+  					-Oz -o kinship/merged_filtered.vcf.gz
 
 			plink2 --vcf kinship/merged_filtered.vcf.gz \
 				--make-king-table \
@@ -638,10 +638,29 @@ if config.get('hipstr'):
 	# Joint STR genotyping across all samples in one call. HipSTR uses the RG SM
 	# tag (set in gatk_split_ncigar) to separate samples, and requires sorted +
 	# indexed bams and a .fai-indexed uncompressed reference.
+	# below rule removes any remaining unmapped (N) reads as HIPSTR won't accept these
+	rule hipstr_filter_ncigar:
+		input:
+			bam = 'gatk_split/{sample}_split.bam',
+			bai = 'gatk_split/{sample}_split.bam.bai',
+			regions = GT['str_bed']
+		output:
+			bam = temp('gatk_split/{sample}_split_noN.bam'),
+			bai = temp('gatk_split/{sample}_split_noN.bam.bai')
+		conda: 'OGVFB_RNAseq.yml'
+		shell:
+			"""
+			mkdir -p hipstr_bams
+			samtools view -h -F 2308 -L {input.regions} {input.bam} \
+				| awk 'BEGIN{{OFS="\\t"}} /^@/{{print; next}} $6 !~ /N/' \
+				| samtools sort -o {output.bam} -
+			samtools index {output.bam}
+			"""
+
 	rule hipstr_genotype:
 		input:
-			bams = expand('gatk_split/{sample}_split.bam', sample=sample_files),
-			bais = expand('gatk_split/{sample}_split.bam.bai', sample=sample_files),
+			bams = expand('gatk_split/{sample}_split_noN.bam', sample=sample_files),
+			bais = expand('gatk_split/{sample}_split_noN.bam.bai', sample=sample_files),
 			ref = GT['fa'],
 			fai = GT['fai'],
 			regions = GT['str_bed']
