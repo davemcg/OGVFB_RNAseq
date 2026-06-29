@@ -19,6 +19,7 @@ sbcmd="sbatch --cpus-per-task={threads} \
 --error={cluster.error} \
 {cluster.extra}"
 
+#--scheduler greedy \
 
 snakemake -s /home/mcgaugheyd/git/OGVFB_RNAseq/Snakefile \
   --scheduler greedy \
@@ -29,5 +30,5 @@ snakemake -s /home/mcgaugheyd/git/OGVFB_RNAseq/Snakefile \
   --cluster "$sbcmd"  --latency-wait 120 --rerun-incomplete \
   --configfile $1 --use-conda \
   -k --restart-times 0 \
-  --resources parallel=4
+  --resources parallel=30
 
