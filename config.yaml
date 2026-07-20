@@ -1,11 +1,14 @@
 sample_fastq_table: 'sample_table.tsv'
-forward_suffix: '_R1_001'
-reverse_suffix: '_R2_001'
-fastq_relative_dir: 'fastq'
+fq1_suffix: "_R1_001.fastq.gz"
+fq2_suffix: "_R2_001.fastq.gz"
+fqS_suffix: '.fastq.gz'
+fastq_dir: "/data/mcgaugheyd/projects/nei/OGVFB_rna_seq/fastq"
 star: True
 counts: True
 make_counts_script: '~/git/OGVFB_RNAseq/src/make_bulk_counts.R'
 bigwig: True
+kinship: False
+hipstr: False
 references:
   human:
     annotation_path: "/data/mcgaugheyd/genomes/GRCh38/"
@@ -15,6 +18,7 @@ references:
     gtf_url: "ftp://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_47/gencode.v47.annotation.gtf.gz"
     transcripts: "gencode.v47.transcripts.fa.gz"
     transcripts_url: "ftp://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_47/gencode.v47.transcripts.fa.gz"
+    str_regions: "/data/mcgaugheyd/genomes/GRCh38/hg38.hipstr_reference.bed"
   mouse:
     annotation_path: "/data/mcgaugheyd/genomes/GRCm39/"
     genome: "GRCm39.primary_assembly.genome.fa.gz"

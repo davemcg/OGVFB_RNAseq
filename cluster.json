@@ -39,7 +39,8 @@
 	},
 	"make_counts" :
 	{
-		"mem" : "360g"
+		"partition" : "norm",
+		"mem" : "120g"
 	},
 	"gatk_genotype_sample" :
 	{
@@ -48,8 +49,38 @@
 		"partition" : "norm",
 		"extra" : " --gres=lscratch:140"
 	},
+	"gatk_split_ncigar" :
+	{
+		"time" : "6:00:00",
+		"partition" : "norm",
+		"extra" : " --gres=lscratch:40"
+	},
+	"gatk_haplotypecaller_gvcf" :
+	{
+		"time" : "24:00:00",
+		"partition" : "norm",
+		"extra" : " --gres=lscratch:40"
+	},
+	"gatk_joint_genotype" :
+	{		
+		"time" : "24:00:00",
+		"partition" : "norm",
+		"extra" : " --gres=lscratch:40"
+	},
+	"gatk_joint_genotype_split":
+	{		
+		"time" : "24:00:00",
+		"partition" : "norm",
+		"extra" : " --gres=lscratch:40"
+	},
+	"hipstr_genotype" :
+	{
+		"time" : "24:00:00",
+		"partition" : "norm"
+	},	
 	"multiqc" :
 	{
+		"partition" : "norm",
 		"time" : "8:00:00",
 		"mem" : "96g"
 	}

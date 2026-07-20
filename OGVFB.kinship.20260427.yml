@@ -6,4 +6,5 @@ channels:
 dependencies:
   - bcftools
   - plink2
-  - gatk
+  - gatk4=4.6.1.0
+  - samtools
