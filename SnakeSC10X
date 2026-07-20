@@ -1,13 +1,48 @@
 git_dir = config['git_dir']
-rule all:
-	input:
-		expand('data/bioc_dims{dims}_hvg{hvg}_subset{subsets}.obj.Rdata', \
+
+
+CHEMISTRY_MAP = {
+	"v2": {
+		"umi_len": 10,
+		"whitelist": "/usr/local/apps/cellranger/10.0.0/lib/python/cellranger/barcodes/737K-august-2016.txt"
+	},
+	"v3": {
+		"umi_len": 12,
+		"whitelist": "/usr/local/apps/cellranger/10.0.0/lib/python/cellranger/barcodes/3M-february-2018_TRU.txt.gz"
+	},
+	"v4.3prime": {
+		"umi_len": 12,
+		"whitelist": "/usr/local/apps/cellranger/10.0.0/lib/python/cellranger/barcodes/3M-3pgex-may-2023.txt.gz"
+	},
+	"v4.5prime": {
+		"umi_len": 12,
+		"whitelist": "/usr/local/apps/cellranger/10.0.0/lib/python/cellranger/barcodes/3M-5pgex-jan-2023.txt.gz"
+	}
+}
+
+chem_version = config.get("chemistry", "v3")
+star_layout = CHEMISTRY_MAP[chem_version]
+
+if config['genotype']:
+	rule all:
+		input:	
+			expand('data/rapids_dims{dims}_hvg{hvg}_subset{subsets}.h5ad', \
 					dims = config['dims'], \
 					hvg = config['hvg'], \
 					subsets = config['subsets']),
-		expand('seacells/{tag}.obs.csv.gz',  tag = config['samples']),
-		'aggr/solo.csv.gz',
-		expand('fastqc/{tag}/possorted_genome_bam_fastqc.html', tag = config['samples'])
+			'aggr/solo.csv.gz',
+			expand('fastqc/{tag}/possorted_genome_bam_fastqc.html', tag = config['samples']),
+			expand('genotype/{tag}_vireo', tag = config['samples'])
+
+else:
+	rule all:
+		input:
+			expand('data/rapids_dims{dims}_hvg{hvg}_subset{subsets}.h5ad', \
+					dims = config['dims'], \
+					hvg = config['hvg'], \
+					subsets = config['subsets']),
+			'aggr/solo.csv.gz',
+			expand('fastqc/{tag}/possorted_genome_bam_fastqc.html', tag = config['samples'])
 # cellranger mkref --genome=GRCh38_GFP_RFP --fasta=reference_cellranger-GRCh38-1.2.0_plus_GFP/genome_GFP_RFP.fa --genes reference_cellranger-GRCh38-1.2.0_plus_GFP/genes_GFP_RFP.gtf --nthreads=10
 
 #rule STAR_index:
@@ -21,10 +56,13 @@ rule call:
 	input:
 		'fastq/'
 	output:
-		'{tag}/outs/cloupe.cloupe'
+		h5 = '{tag}/outs/cloupe.cloupe',
+		bam = '{tag}/outs/possorted_genome_bam.bam',
+		bc = '{tag}/outs/filtered_feature_bc_matrix/barcodes.tsv.gz'
 	threads: 8 
 	shell:
 		"""
+		# NOTE - use cellranger >= 10.0.0
 		mkdir -p {wildcards.tag}
 		rm -r {wildcards.tag}
 		module load {config[cellranger_version]}
@@ -34,7 +72,8 @@ rule call:
 			--fastqs fastq/ \
 			--transcriptome {config[transcriptome]} \
 			--localcores {threads} \
-			--localmem=30 
+			--localmem=30 \
+			--create-bam true
 		"""
 
 
@@ -103,7 +142,7 @@ if config['cellbender']:
 			h5_in = 'raw_feature_bc_matrix.h5',
 			h5_out_dir = '{tag}/outs/'
 		output:
-			'{tag}/outs/cellbender_filtered.h5'
+			h5 = '{tag}/outs/cellbender_filtered.h5',
 		shell:
 			"""
 			module load cellbender/0.3.0
@@ -116,21 +155,6 @@ if config['cellbender']:
 			rm ckpt.tar.gz
 			"""
 
-	rule seacells:
-		input:
-			'{tag}/outs/cloupe.cloupe',
-			'{tag}/outs/cellbender_filtered.h5'
-		params:
-			h5 = '{tag}/outs/cellbender_filtered.h5'
-		output:
-			'seacells/{tag}.obs.csv.gz',
-			'seacells/{tag}.seacell_aggr.csv.gz'
-		shell:
-			"""
-			mkdir -p seacells
-			/data/mcgaugheyd/conda/envs/seacells/bin/python /home/mcgaugheyd/git/OGVFB_RNAseq/src/seacell_maker.py {params.h5} {wildcards.tag} {output}
-			"""
-
 	rule quick_process:
 		input:
 			sample_info = config['sample_info'],
@@ -138,13 +162,12 @@ if config['cellbender']:
 			solo = 'aggr/solo.csv.gz',
 			cellbender = expand('{tag}/outs/cellbender_filtered.h5',  tag = config['samples'])
 		output:
-			'data/bioc_dims{dims}_hvg{hvg}_subset{subsets}.obj.Rdata'
-		threads: 4
+			'data/rapids_dims{dims}_hvg{hvg}_subset{subsets}.h5ad'
+		threads: 2
+		conda: "rapids_2604_scvi"
 		shell:
 			"""
-			module load R/4.2
-			Rscript {git_dir}/src/scRNA_quick_start.R \
-				{input.sample_info} \
+			python {git_dir}/src/scRNA_quick_start.py \{input.sample_info} \
 				{wildcards.hvg} \
 				{wildcards.dims} \
 				{output} \
@@ -154,19 +177,6 @@ if config['cellbender']:
 
 else:
 	print("\n\nRunning workflow without decontamination\n\n")
-	rule seacells:
-		input:
-			'{tag}/outs/cloupe.cloupe'
-		params:
-			h5 = '{tag}/outs/filtered_feature_bc_matrix.h5'
-		output:
-			'seacells/{tag}.obs.csv.gz',
-			'seacells/{tag}.seacell_aggr.csv.gz'
-		shell:
-			"""
-			mkdir -p seacells
-			/data/mcgaugheyd/conda/envs/seacells/bin/python /home/mcgaugheyd/git/OGVFB_RNAseq/src/seacell_maker.py {params.h5} {wildcards.tag} {output}
-			"""
 	
 	rule quick_process:
 		input:
@@ -174,12 +184,12 @@ else:
 			cloupe = 'aggr/outs/count/cloupe.cloupe',
 			solo = 'aggr/solo.csv.gz'
 		output:
-			'data/bioc_dims{dims}_hvg{hvg}_subset{subsets}.obj.Rdata'
+			'data/rapids_dims{dims}_hvg{hvg}_subset{subsets}.h5ad'
 		threads: 4
+		conda: "rapids_2604_scvi"
 		shell:
 			"""
-			module load R/4.2
-			Rscript {git_dir}/src/scRNA_quick_start.R \
+			python {git_dir}/src/scRNA_quick_start.py \
 				{input.sample_info} \
 				{wildcards.hvg} \
 				{wildcards.dims} \
@@ -188,4 +198,80 @@ else:
 				{wildcards.subsets}
 			"""
 
-		
+if config['genotype']:
+	
+	# made several attempts to use the cellranger count bam, but 
+	# it consistently performed way worse at genotype accuracy
+	# I'm guessing something to do with multimappers.
+	rule star_solo:
+		input:
+			'fastq/'
+		output:
+			bam = 'genotype/{tag}_star/Aligned.sortedByCoord.out.bam',
+			bc = 'genotype/{tag}_star/Solo.out/Gene/filtered/barcodes.tsv'
+		threads: 16
+		conda: "cellsnp"
+		params:
+			umi_len = star_layout["umi_len"],
+			whitelist = star_layout["whitelist"]
+		shell:
+			"""
+			mkdir -p genotype/{wildcards.tag}_star/
+
+			R1_fq=$(ls fastq/{wildcards.tag}_*R1*.fastq.gz 2>/dev/null | tr '\\n' ',' | sed 's/,$//')
+			R2_fq=$(ls fastq/{wildcards.tag}_*R2*.fastq.gz 2>/dev/null | tr '\\n' ',' | sed 's/,$//')
+
+			if [ -z "$R1_fq" ] || [ -z "$R2_fq" ]; then
+				R1_fq=$(ls fastq/*{wildcards.tag}*R1*.fastq.gz 2>/dev/null | tr '\\n' ',' | sed 's/,$//')
+				R2_fq=$(ls fastq/*{wildcards.tag}*R2*.fastq.gz 2>/dev/null | tr '\\n' ',' | sed 's/,$//')
+			fi
+
+			STAR \
+			  --runThreadN {threads} \
+			  --genomeDir /data/mcgaugheyd/genomes/GRCh38/GRCh38.primary_assembly.genome.fa.gz_gencode.v47.annotation.gtf.gz_STAR \
+			  --readFilesIn "$R2_fq" "$R1_fq" \
+			  --readFilesCommand zcat \
+			  --soloType CB_UMI_Simple \
+			  --soloCBwhitelist <(zcat {params.whitelist}) \
+			  --soloCBstart 1 --soloCBlen 16 \
+			  --soloUMIstart 17 --soloUMIlen {params.umi_len} \
+			  --soloFeatures Gene GeneFull \
+			  --outSAMtype BAM SortedByCoordinate \
+			  --outSAMattributes NH HI AS nM CR CB UB GX GN \
+			  --soloCellFilter  EmptyDrops_CR \
+			  --outFileNamePrefix "genotype/{wildcards.tag}_star/"
+			
+			samtools index {output.bam} 
+			"""
+
+	rule cellsnp:
+		input:
+			bam = 'genotype/{tag}_star/Aligned.sortedByCoord.out.bam',
+			barcode = 'genotype/{tag}_star/Solo.out/Gene/filtered/barcodes.tsv',
+			vcf = config['vcf']
+		output:
+			directory('genotype/{tag}_cellsnp')
+		conda: "cellsnp"
+		threads: 16
+		shell:
+			"""
+			cellsnp-lite -s {input.bam} \
+				-b {input.barcode} \
+				-R {input.vcf} \
+				-p 16 --gzip --genotype \
+				-O {output}
+			"""
+	
+	rule vireo:
+		input:
+			snp = 'genotype/{tag}_cellsnp',
+			vcf = config['vcf']
+		output:
+			directory('genotype/{tag}_vireo')
+		conda: "cellsnp"
+		shell:
+			"""
+			vireo -c {input.snp} \
+				  -d {input.vcf} \
+				  -o {output} 
+			"""
