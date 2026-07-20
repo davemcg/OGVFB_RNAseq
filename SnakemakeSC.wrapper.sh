@@ -4,7 +4,8 @@
 # module load snakemake || exit 1
 
 # activate conda
-source /data/mcgaugheyd/conda/etc/profile.d/conda.sh
+source /data/$USER/conda/etc/profile.d/conda.sh && source /data/$USER/conda/etc/profile.d/mamba.sh
+#source /data/mcgaugheyd/conda/etc/profile.d/conda.sh
 conda activate kallisto_046
 
 mkdir -p 00log 
@@ -20,7 +21,8 @@ sbcmd="sbatch --cpus-per-task={threads} \
 snakemake -s /home/mcgaugheyd/git/OGVFB_RNAseq/SnakeSC10X \
 -pr --jobs 1999 \
 --configfile $1 \
---use-conda \
+--rerun-triggers mtime \
+--use-conda --local-cores 2  \
 --cluster-config $2 \
 --cluster "$sbcmd"  --latency-wait 120 --rerun-incomplete \
 -k --restart-times 0 \
