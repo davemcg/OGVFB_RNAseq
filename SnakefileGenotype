@@ -146,12 +146,12 @@ if config.get('star'):
 	TARGETS.extend(STAR_QUANT_OUTPUT)
 
 if config.get('kinship'):
-    TARGETS.append('kinship/kinship_scores.kin0')
-    TARGETS.append('STAR_output.tsv')
+	TARGETS.append('kinship/kinship_scores.kin0')
+	TARGETS.append('STAR_output.tsv')
 
 if config.get('hipstr'):
-     TARGETS.append('hipstr/str_calls.vcf.gz')
-     TARGETS.append('STAR_output.tsv')
+	 TARGETS.append('hipstr/str_calls.vcf.gz')
+	 TARGETS.append('STAR_output.tsv')
 
 rule all:
 	input:
@@ -216,6 +216,45 @@ rule download_references:
 		wget -c {params.transcripts_url} -O {params.ann_path}/{params.transcripts}
 		"""
 
+rule STAR_index:
+	input:
+		"flags/download_{organism}.done"
+	output:
+		touch("flags/STAR_index_{organism}.done")
+	params:
+		ann_path = lambda w: config['references'][w.organism]['annotation_path'].rstrip('/'),
+		genome = lambda w: config['references'][w.organism]['genome'],
+		gtf = lambda w: config['references'][w.organism]['gtf']
+	threads: 16
+	priority: 500
+	conda: 'OGVFB_RNAseq.yml'
+	shell:
+		"""
+		fasta="{params.ann_path}/{params.genome}"
+		gtf="{params.ann_path}/{params.gtf}"
+		out_dir="{params.ann_path}/{params.genome}_{params.gtf}_STAR"
+		
+		# Check if the STAR index files already exist
+		if [ -f "$out_dir/Genome" ] && [ -f "$out_dir/SA" ]; then
+			echo "STAR index already exists at $out_dir. Skipping generation."
+		else
+			mkdir -p $out_dir
+			zcat $fasta > {wildcards.organism}_tmp_fasta
+			zcat $gtf > {wildcards.organism}_tmp_gtf
+			
+			STAR --runThreadN {threads} \
+				--runMode genomeGenerate \
+				--genomeDir $out_dir \
+				--sjdbGTFfile {wildcards.organism}_tmp_gtf \
+				--sjdbOverhang 100 \
+				--genomeFastaFiles {wildcards.organism}_tmp_fasta \
+				--limitGenomeGenerateRAM=140090479317
+				
+			rm {wildcards.organism}_tmp_fasta
+			rm {wildcards.organism}_tmp_gtf
+		fi
+		"""
+
 rule salmon_index:
 	input:
 		"flags/download_{organism}.done"
@@ -235,49 +274,20 @@ rule salmon_index:
 		genome="{params.ann_path}/{params.genome}"
 		out_dir="{params.ann_path}/{params.index_name}"
 		
-		grep "^>" <( gunzip -c $genome ) | cut -d " " -f 1 > {wildcards.organism}_decoys.txt
-		sed -i.bak -e 's/>//g' {wildcards.organism}_decoys.txt
-		cat $tx $genome > {wildcards.organism}_gentrome.fa.gz
-		
-		salmon index -t {wildcards.organism}_gentrome.fa.gz \
-			-d {wildcards.organism}_decoys.txt \
-			-p {threads} -i $out_dir -k 31
+		# Check if the Salmon index already exists
+		if [ -f "$out_dir/info.json" ]; then
+			echo "Salmon index already exists at $out_dir. Skipping generation."
+		else
+			grep "^>" <( gunzip -c $genome ) | cut -d " " -f 1 > {wildcards.organism}_decoys.txt
+			sed -i.bak -e 's/>//g' {wildcards.organism}_decoys.txt
+			cat $tx $genome > {wildcards.organism}_gentrome.fa.gz
 			
-		rm {wildcards.organism}_decoys.txt {wildcards.organism}_decoys.txt.bak {wildcards.organism}_gentrome.fa.gz
-		"""
-
-rule STAR_index:
-	input:
-		"flags/download_{organism}.done"
-	output:
-		touch("flags/STAR_index_{organism}.done")
-	params:
-		ann_path = lambda w: config['references'][w.organism]['annotation_path'].rstrip('/'),
-		genome = lambda w: config['references'][w.organism]['genome'],
-		gtf = lambda w: config['references'][w.organism]['gtf']
-	threads: 16
-	priority: 500
-	conda: 'OGVFB_RNAseq.yml'
-	shell:
-		"""
-		fasta="{params.ann_path}/{params.genome}"
-		gtf="{params.ann_path}/{params.gtf}"
-		out_dir="{params.ann_path}/{params.genome}_{params.gtf}_STAR"
-		
-		mkdir -p $out_dir
-		zcat $fasta > {wildcards.organism}_tmp_fasta
-		zcat $gtf > {wildcards.organism}_tmp_gtf
-		
-		STAR --runThreadN {threads} \
-			--runMode genomeGenerate \
-			--genomeDir $out_dir \
-			--sjdbGTFfile {wildcards.organism}_tmp_gtf \
-			--sjdbOverhang 100 \
-			--genomeFastaFiles {wildcards.organism}_tmp_fasta \
-			--limitGenomeGenerateRAM=140090479317
-			
-		rm {wildcards.organism}_tmp_fasta
-		rm {wildcards.organism}_tmp_gtf
+			salmon index -t {wildcards.organism}_gentrome.fa.gz \
+				-d {wildcards.organism}_decoys.txt \
+				-p {threads} -i $out_dir -k 31
+				
+			rm {wildcards.organism}_decoys.txt {wildcards.organism}_decoys.txt.bak {wildcards.organism}_gentrome.fa.gz
+		fi
 		"""
 
 rule salmon_quant:
@@ -566,29 +576,57 @@ if config.get('kinship'):
 				-standard-min-confidence-threshold-for-calling 20.0
 			"""
 
+	AUTOSOMES = [f"chr{i}" for i in range(1, 23)]
+	SEX_CHRS = ["chrX", "chrY"]
+	REGIONS = AUTOSOMES + SEX_CHRS + ["remaining"]
+
+
+	# Gather the split VCFs
 	rule gatk_joint_genotype:
+		input:
+			vcfs = expand('gatk_calls/split/joint_raw_{region}.vcf.gz', region=REGIONS)
+		output:
+			vcf = 'gatk_calls/joint_raw.vcf.gz',
+			tbi = 'gatk_calls/joint_raw.vcf.gz.tbi'
+		params:
+			input_args = lambda w, input: ' '.join(f'-I {v}' for v in input.vcfs)
+		conda: 'OGVFB.kinship.20260427.yml'
+		shell:
+			"""
+			gatk GatherVcfs \
+				{params.input_args} \
+				-O {output.vcf}
+			tabix -p vcf {output.vcf}
+			"""
+
+	# Parallelized by region
+	rule gatk_joint_genotype_split:
 		input:
 			gvcfs = expand('gatk_calls/{sample}.g.vcf.gz', sample=sample_files),
 			ref = GT['fa'],
 			fai = GT['fai'],
 			dict_file = GT['dict']
 		output:
-			vcf = 'gatk_calls/joint_raw.vcf.gz'
+			vcf = 'gatk_calls/split/joint_raw_{region}.vcf.gz',
+			tbi = 'gatk_calls/split/joint_raw_{region}.vcf.gz.tbi'
 		params:
-			tmp = '/lscratch/$SLURM_JOB_ID/gatk_joint',
-			variant_args = lambda w, input: ' '.join(f'-V {g}' for g in input.gvcfs)
+			tmp = '/lscratch/$SLURM_JOB_ID/gatk_joint_{region}',
+			variant_args = lambda w, input: ' '.join(f'-V {g}' for g in input.gvcfs),
+			interval_args = lambda w: " ".join(f"-XL {c}" for c in AUTOSOMES + SEX_CHRS) if w.region == "remaining" else f"-L {w.region}"
+		threads: 4  
 		conda: 'OGVFB.kinship.20260427.yml'
 		shell:
 			"""
 			mkdir -p {params.tmp}
+			gatk --java-options "-Xmx4g" GenomicsDBImport \
+				{params.variant_args} \
+				--genomicsdb-workspace-path {params.tmp}/db \
+				{params.interval_args}
 
-			gatk CombineGVCFs \
-				-R {input.ref} {params.variant_args} \
-				-O {params.tmp}/combined.g.vcf.gz
-
-			gatk GenotypeGVCFs \
-				-R {input.ref} -V {params.tmp}/combined.g.vcf.gz \
-				-O {output.vcf}
+			gatk --java-options "-Xmx4g -XX:ParallelGCThreads=4" GenotypeGVCFs \
+				-R {input.ref} \
+				-V gendb://{params.tmp}/db \
+				-O {output.vcf} \
 
 			rm -rf {params.tmp}
 			"""
@@ -596,6 +634,7 @@ if config.get('kinship'):
 	rule gatk_variant_filtration:
 		input:
 			vcf = 'gatk_calls/joint_raw.vcf.gz',
+			tbi = 'gatk_calls/joint_raw.vcf.gz.tbi',
 			ref = GT['fa'],
 			fai = GT['fai'],
 			dict_file = GT['dict']
