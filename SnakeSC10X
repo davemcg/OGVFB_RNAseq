@@ -23,6 +23,8 @@ CHEMISTRY_MAP = {
 chem_version = config.get("chemistry", "v3")
 star_layout = CHEMISTRY_MAP[chem_version]
 
+multiplex_n = config.get("multiplex_number", 12)
+
 if config['genotype']:
 	rule all:
 		input:	
@@ -260,18 +262,36 @@ if config['genotype']:
 				-R {input.vcf} \
 				-p 16 --gzip --genotype \
 				-O {output}
+			tabix -p vcf {output}/cellSNP.cells.vcf.gz
+			bcftools +fill-tags {output}/cellSNP.cells.vcf.gz -O z -o {output}/cellSNP.cells.stats.vcf.gz -- -t AF,AC,AN,NS
 			"""
 	
 	rule vireo:
 		input:
-			snp = 'genotype/{tag}_cellsnp',
-			vcf = config['vcf']
-		output:
-			directory('genotype/{tag}_vireo')
-		conda: "cellsnp"
-		shell:
-			"""
-			vireo -c {input.snp} \
-				  -d {input.vcf} \
-				  -o {output} 
-			"""
+		snp = 'genotype/{tag}_cellsnp',
+		vcf = config['vcf']
+	output:
+		vireo_dir = directory('genotype/{tag}_vireo'),
+		king_table = 'genotype/{tag}_vireo/plink2_king.kin0'
+	conda: "cellsnp"  # Ensure plink2, bcftools, and tabix are installed in this env
+	params: 
+		multiplex_n = multiplex_n
+	shell:
+		"""
+		# 1. Run Vireo
+		vireo -p 8 \
+			   -N {params.multiplex_n} \
+			  -c {input.snp} \
+			  -o {output.vireo_dir}
+
+		# 2. Index Vireo donor VCF and merge with reference VCF
+		tabix -f -p vcf {output.vireo_dir}/GT_donors.vireo.vcf.gz
+		bcftools merge {output.vireo_dir}/GT_donors.vireo.vcf.gz {input.vcf} \
+			-O z -o {output.vireo_dir}/merged.vcf.gz
+
+		# 3. Calculate Kinship using PLINK2
+		plink2 --vcf {output.vireo_dir}/merged.vcf.gz \
+			   --allow-extra-chr \
+			   --make-king-table \
+			   --out {output.vireo_dir}/plink2_king
+		"""	
