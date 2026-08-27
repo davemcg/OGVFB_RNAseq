@@ -12,7 +12,7 @@ CHEMISTRY_MAP = {
 	},
 	"v4.3prime": {
 		"umi_len": 12,
-		"whitelist": "/usr/local/apps/cellranger/10.0.0/lib/python/cellranger/barcodes/3M-3pgex-may-2023.txt.gz"
+		"whitelist": "/usr/local/apps/cellranger/10.0.0/lib/python/cellranger/barcodes/3M-3pgex-may-2023_TRU.txt.gz"
 	},
 	"v4.5prime": {
 		"umi_len": 12,
@@ -249,8 +249,7 @@ if config['genotype']:
 	rule cellsnp:
 		input:
 			bam = 'genotype/{tag}_star/Aligned.sortedByCoord.out.bam',
-			barcode = 'genotype/{tag}_star/Solo.out/Gene/filtered/barcodes.tsv',
-			vcf = config['vcf']
+			barcode = 'genotype/{tag}_star/Solo.out/Gene/filtered/barcodes.tsv'
 		output:
 			directory('genotype/{tag}_cellsnp')
 		conda: "cellsnp"
@@ -259,7 +258,7 @@ if config['genotype']:
 			"""
 			cellsnp-lite -s {input.bam} \
 				-b {input.barcode} \
-				-R {input.vcf} \
+				-R /data/mcgaugheyd/genomes/GRCh38/genome1K.phase3.SNP_AF5e2.chr1toX.hg38.chr.sorted.vcf.gz \
 				-p 16 --gzip --genotype \
 				-O {output}
 			tabix -p vcf {output}/cellSNP.cells.vcf.gz
@@ -268,30 +267,40 @@ if config['genotype']:
 	
 	rule vireo:
 		input:
-		snp = 'genotype/{tag}_cellsnp',
-		vcf = config['vcf']
-	output:
-		vireo_dir = directory('genotype/{tag}_vireo'),
-		king_table = 'genotype/{tag}_vireo/plink2_king.kin0'
-	conda: "cellsnp"  # Ensure plink2, bcftools, and tabix are installed in this env
-	params: 
-		multiplex_n = multiplex_n
-	shell:
-		"""
-		# 1. Run Vireo
-		vireo -p 8 \
-			   -N {params.multiplex_n} \
-			  -c {input.snp} \
-			  -o {output.vireo_dir}
+			snp = 'genotype/{tag}_cellsnp',
+			vcf = config['vcf']
+		output:
+			vireo_dir = directory('genotype/{tag}_vireo'),
+			king_table = 'genotype/{tag}_vireo/plink2_king.kin0'
+		conda: "cellsnp"  # Ensure plink2, bcftools, and tabix are installed in this env
+		threads: 16
+		params: 
+			multiplex_n = multiplex_n
+		shell:
+			"""
+			# 1. Run Vireo
+			# first in predict mode
+			vireo -p 16 \
+				   -N {params.multiplex_n} \
+				  -c {input.snp} \
+				  -d {input.vcf} \
+				  -o {output.vireo_dir}_Pred
+			
+			# then in de novo mode (and genotype each donor with king below)
+			vireo -p 16 \
+				   -N {params.multiplex_n} \
+				  -c {input.snp} \
+				  -o {output.vireo_dir}
+		
+			# 2. Index Vireo donor VCF and merge with reference VCF
+			tabix -f -p vcf {output.vireo_dir}/GT_donors.vireo.vcf.gz
+			bcftools merge --merge none {output.vireo_dir}/GT_donors.vireo.vcf.gz {input.vcf} \
+				-O z -o {output.vireo_dir}/merged.vcf.gz
 
-		# 2. Index Vireo donor VCF and merge with reference VCF
-		tabix -f -p vcf {output.vireo_dir}/GT_donors.vireo.vcf.gz
-		bcftools merge {output.vireo_dir}/GT_donors.vireo.vcf.gz {input.vcf} \
-			-O z -o {output.vireo_dir}/merged.vcf.gz
-
-		# 3. Calculate Kinship using PLINK2
-		plink2 --vcf {output.vireo_dir}/merged.vcf.gz \
-			   --allow-extra-chr \
+			# 3. Calculate Kinship using PLINK2
+			plink2 --vcf {output.vireo_dir}/merged.vcf.gz \
+			   --autosome \
+				--allow-extra-chr \
 			   --make-king-table \
 			   --out {output.vireo_dir}/plink2_king
-		"""	
+			"""	
