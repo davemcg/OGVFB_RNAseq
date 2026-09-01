@@ -1,0 +1,14 @@
+name: stringtie_env
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - stringtie=3.0.3
+  - samtools  # Recommended helper for BAM processing
+  - gffread   # Recommended helper for GTF/GFF conversions
+  - transdecoder
+  - python>=3.9,<3.13
+  - pip
+  - pip:
+    - TD2 
