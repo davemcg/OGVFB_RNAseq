@@ -12,9 +12,9 @@ sample_run_setup = config['sample_fastq_table']
 # format of study_fq_tsv
 # tab separated
 # setup is either "paired" or "single"
-# header of: sample_accession   run_accession_prefix    setup   organism
+# header of: sample_accession   run_accession_prefix	setup   organism
 # example line:
-# D3C_D0    D3C_D0_1__HJLT7DSX3_19270591_S73_L002   paired  human
+# D3C_D0	D3C_D0_1__HJLT7DSX3_19270591_S73_L002   paired  human
 # ending of run_accession taken from config.yaml
 for line in open(sample_run_setup):
 	if len(line.split('\t')) != 4:
@@ -46,10 +46,10 @@ def return_fq(prefix):
 	setup = sample_setup_dict[prefix]
 	out = []
 	if setup == 'single':
-		out.append('fastq_trimmed/' + prefix + config['fqS_suffix'])
+		out.append(ancient('fastq_trimmed/' + prefix + config['fqS_suffix']))
 	else:
-		out.append('fastq_trimmed/' + prefix + config['fq1_suffix'])
-		out.append('fastq_trimmed/' + prefix + config['fq2_suffix'])
+		out.append(ancient('fastq_trimmed/' + prefix + config['fq1_suffix']))
+		out.append(ancient('fastq_trimmed/' + prefix + config['fq2_suffix']))
 	return(out)
 
 def salmon_input_maker(prefix):
@@ -80,10 +80,19 @@ def get_gtf(wildcards):
 	gtf = config['references'][organism]['gtf']
 	ann_path = config['references'][organism]['annotation_path'].rstrip('/')
 	return f"{ann_path}/{gtf}"
+
+def get_organism_gtfs(wildcards):
+	organism_samples = [s for s, org in sample_organism_dict.items() if org == wildcards.organism]
+	return [f"stringtie/{s}/{s}.gtf.gz/" for s in organism_samples]
+
+def get_organism_ref_gtf(wildcards):
+	gtf = config['references'][wildcards.organism]['gtf']
+	ann_path = config['references'][wildcards.organism]['annotation_path'].rstrip('/')
+	return f"{ann_path}/{gtf}"
 # -----------------------------------------------------
 
 suffixes = [config['fq1_suffix'], config['fq2_suffix'], config['fqS_suffix']]
-
+organisms = list(set(sample_organism_dict.values()))
 wildcard_constraints:
 	run = '|'.join(run_files),
 	sample = '|'.join(sample_files),
@@ -101,6 +110,11 @@ FASTQC_OUTPUT = ['fastqc/' + sample + '.done' \
 BIGWIG_OUTPUT = ['bigwig/' + sample + '.bw'  \
 	for sample in sample_files]
 
+STRINGTIE_OUTPUT = ['stringtie/' + sample + '/' + sample + '.TD2.bed.gz' \
+	for sample in sample_files]
+
+STRINGTIE_MERGED_OUTPUT = ['stringtie/' + org + '_merged.gtf' \
+	for org in organisms]
 
 localrules: all, print_SALMON_quants, print_STAR_quants  
 
@@ -116,6 +130,10 @@ if config.get('bigwig'):
 if config.get('star'):
 	TARGETS.append('STAR_output.tsv')
 	TARGETS.extend(STAR_QUANT_OUTPUT)
+
+if config.get('stringtie'):
+	TARGETS.extend(STRINGTIE_OUTPUT)
+	TARGETS.extend(STRINGTIE_MERGED_OUTPUT)
 
 rule all:
 	input:
@@ -297,6 +315,100 @@ rule STAR_align:
 		samtools sort -T {params.scratch}SAMSORT -o {output.bam} {params.out}Aligned.out.bam
 		rm {params.out}Aligned.out.bam
 		samtools index {output.bam}
+		"""
+
+rule stringtie_assemble:
+	input:
+		bam = 'STAR_align/{sample}/{sample}_aligned.sortedByCoord.out.bam',
+		gtf = get_gtf,
+		ref_flag = lambda wildcards: f"flags/download_{sample_organism_dict[wildcards.sample]}.done"
+	output:
+		gtf = 'stringtie/{sample}/{sample}.gtf.gz'
+	threads: 8
+	priority: 150
+	conda: 'stringtie.yml'
+	shell:
+		"""
+		mkdir -p stringtie/{wildcards.sample}
+		stringtie {input.bam} \
+            -G <(gzip -dc {input.gtf}) \
+            -p {threads} \
+            | gzip -c > {output.gtf}
+		"""
+
+rule transdecoder_complete_orfs:
+	input:
+		gtf = 'stringtie/{sample}/{sample}.gtf.gz',
+		ref_flag = lambda w: f"flags/download_{sample_organism_dict[w.sample]}.done"
+	output:
+		gff3 = 'stringtie/{sample}/{sample}.TD2.gff3.gz',
+		bed = 'stringtie/{sample}/{sample}.TD2.bed.gz',
+		cds = 'stringtie/{sample}/{sample}.TD2.cds.gz',
+		pep = 'stringtie/{sample}/{sample}.TD2.pep.gz'
+	params:
+		ann_path = lambda w: config['references'][sample_organism_dict[w.sample]]['annotation_path'].rstrip('/'),
+		genome_file = lambda w: config['references'][sample_organism_dict[w.sample]]['genome'],
+		tmp_dir  = 'stringtie/{sample}/transdecoder_tmp'
+	threads: 4
+	conda: 'stringtie.yml'
+	shell:
+		"""
+		TMP_DIR="{params.tmp_dir}"
+		rm -rf "$TMP_DIR" && mkdir -p "$TMP_DIR"
+		trap 'rm -rf "$TMP_DIR"' EXIT
+
+		WORKDIR="$(pwd)"
+		GENOME_FA="{params.ann_path}/{params.genome_file}"
+		UNZIP_FA="$WORKDIR/$TMP_DIR/genome.fa"
+
+		# 1. Uncompress FASTA if needed and index
+		if [[ "$GENOME_FA" == *.gz ]]; then
+			gunzip -c "$GENOME_FA" > "$UNZIP_FA"
+		else
+			cp "$GENOME_FA" "$UNZIP_FA"
+		fi
+		samtools faidx "$UNZIP_FA"
+
+		# 2. Filter input GTF into temporary directory
+		zgrep -E "^(#|chr|[0-9]|MT)" "{input.gtf}" > "$TMP_DIR/temp.gtf"
+
+		# 3. Process TransDecoder outputs in subshell
+		(
+			cd "$TMP_DIR"
+
+			~/git/TD2/util/gtf_genome_to_cdna_fasta.pl temp.gtf genome.fa > transcripts.fasta
+			~/git/TD2/util/gtf_to_alignment_gff3.pl temp.gtf > transcripts.gff3
+
+			TD2.LongOrfs -t transcripts.fasta -S --threads 8
+			TD2.Predict -t transcripts.fasta 
+
+			~/git/TD2/util/cdna_alignment_orf_to_genome_orf.pl \
+				transcripts.fasta.TD2.gff3 \
+				transcripts.gff3 \
+				transcripts.fasta > uncompressed.gff3
+
+			~/git/TD2/util/gff3_file_to_bed.pl uncompressed.gff3 > uncompressed.bed
+
+			# 4. Stream compressed outputs directly to target output paths
+			bgzip -c uncompressed.gff3 > "$WORKDIR/{output.gff3}"
+			bgzip -c uncompressed.bed > "$WORKDIR/{output.bed}"
+			bgzip -c transcripts.fasta.TD2.cds > "$WORKDIR/{output.cds}"
+			bgzip -c transcripts.fasta.TD2.pep > "$WORKDIR/{output.pep}"
+		)
+		"""
+
+rule stringtie_merge:
+	input:
+		gtfs = get_organism_gtfs,
+		ref_gtf = get_organism_ref_gtf
+	output:
+		merged_gtf = 'stringtie/{organism}_merged.gtf'
+	threads: 8
+	priority: 160
+	conda: 'stringtie.yml'
+	shell:
+		"""
+		stringtie --merge -G {input.ref_gtf} -o {output.merged_gtf} -p {threads} {input.gtfs}
 		"""
 
 rule deeptools_bamCoverage:
