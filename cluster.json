@@ -16,8 +16,8 @@
 	},
 	"salmon_quant" :
 	{
-		"partition" : "quick",
-		"time" : "04:00:00",
+		"partition" : "norm",
+		"time" : "08:00:00",
 		"mem" : "32g"
 	},
 	"STAR_index" :
@@ -32,6 +32,18 @@
 		"mem" : "48g",
 		"partition" : "norm",
 		"extra" : " --gres=lscratch:140"
+	},
+	"stringtie_assemble" :
+	{
+		"time" : "3:00:00",
+		"mem" : "16g",
+		"partition" : "norm",
+		"extra" : " --gres=lscratch:2"
+	},
+	"transdecoder_complete_orfs" :
+	{
+		"time" : "3:00:00",
+		"mem" : "16g"
 	},
 	"trim_fastq_pe" :
 	{
