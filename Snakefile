@@ -331,9 +331,9 @@ rule stringtie_assemble:
 		"""
 		mkdir -p stringtie/{wildcards.sample}
 		stringtie {input.bam} \
-            -G <(gzip -dc {input.gtf}) \
-            -p {threads} \
-            | gzip -c > {output.gtf}
+			-G <(gzip -dc {input.gtf}) \
+			-p {threads} \
+			| gzip -c > {output.gtf}
 		"""
 
 rule transdecoder_complete_orfs:
@@ -408,7 +408,14 @@ rule stringtie_merge:
 	conda: 'stringtie.yml'
 	shell:
 		"""
-		stringtie --merge -G {input.ref_gtf} -o {output.merged_gtf} -p {threads} {input.gtfs}
+		tmpdir=$(mktemp -d)
+		trap 'rm -rf "$tmpdir"' EXIT
+
+		for f in {input.gtfs}; do
+			gzip -dc "$f" > "$tmpdir/$(basename "$f" .gz)"
+		done
+
+		stringtie --merge -G <(gzip -dc {input.ref_gtf}) -o {output.merged_gtf} -p {threads} "$tmpdir"/*.gtf
 		"""
 
 rule deeptools_bamCoverage:
